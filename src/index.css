@@ -1,0 +1,46 @@
+@import "tailwindcss";
+
+@layer base {
+  html {
+    font-size: 110% !important;
+  }
+
+  *, ::before, ::after {
+    font-family: Calibri, 'Candara', 'Segoe UI', Optima, Arial, sans-serif !important;
+  }
+
+  html, body {
+    font-family: Calibri, 'Candara', 'Segoe UI', Optima, Arial, sans-serif !important;
+    background-color: #f8fafc;
+    color: #0f172a;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  button, input, select, textarea, optgroup, option {
+    font-family: Calibri, 'Candara', 'Segoe UI', Optima, Arial, sans-serif !important;
+  }
+
+  h1, h2, h3, h4, h5, h6, p, span, label, a, td, th, div {
+    font-family: Calibri, 'Candara', 'Segoe UI', Optima, Arial, sans-serif !important;
+  }
+
+  code, kbd, samp, pre, .font-mono {
+    font-family: 'JetBrains Mono', 'Consolas', 'Courier New', monospace !important;
+  }
+}
+
+.font-display {
+  font-family: Calibri, 'Candara', 'Segoe UI', Optima, Arial, sans-serif !important;
+}
+
+@media print {
+  header, footer, nav, button, .no-print, aside, .domain-bar {
+    display: none !important;
+  }
+  body {
+    background: white !important;
+    color: black !important;
+  }
+}
+

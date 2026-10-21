@@ -1,0 +1,53 @@
+[
+  {
+    "id": "tenant-1792107056241",
+    "name": "Christ Our Foundation Specialist Hospital",
+    "adminName": "Dr. Chukwuemeka Eze",
+    "adminPhone": "+2348035551234",
+    "adminEmail": "admin@christourfoundation.org",
+    "contactEmail": "admin@christourfoundation.org",
+    "contactPhone": "+2348035551234",
+    "type": "General Hospital",
+    "accountStatus": "pending_setup",
+    "subscriptionPlan": "Hospital Pro",
+    "subscriptionStatus": "trial",
+    "monthlyFee": 397670,
+    "registeredAt": "2026-10-15T23:30:56.241Z",
+    "lastActiveAt": "2026-10-15T23:30:56.241Z",
+    "technicianSetupDeployed": false
+  },
+  {
+    "id": "tenant-1792163016490",
+    "name": "Good Shepherd Hospital",
+    "adminName": "Dr. Mike Okafor",
+    "adminPhone": "08087132238",
+    "adminEmail": "wesmaster33@gmail.com",
+    "contactEmail": "wesmaster33@gmail.com",
+    "contactPhone": "08087132238",
+    "type": "General Hospital",
+    "accountStatus": "pending_setup",
+    "subscriptionPlan": "Hospital Pro",
+    "subscriptionStatus": "trial",
+    "monthlyFee": 397670,
+    "registeredAt": "2026-10-16T15:03:36.490Z",
+    "lastActiveAt": "2026-10-16T15:03:36.490Z",
+    "technicianSetupDeployed": false
+  },
+  {
+    "id": "tenant-1792163833577",
+    "name": "Mc'Chucks Diagnostics",
+    "adminName": "Dr. Chucks",
+    "adminPhone": "08087132238",
+    "adminEmail": "teamfandf16@gmail.com",
+    "contactEmail": "teamfandf16@gmail.com",
+    "contactPhone": "08087132238",
+    "type": "General Hospital",
+    "accountStatus": "pending_setup",
+    "subscriptionPlan": "Hospital Pro",
+    "subscriptionStatus": "trial",
+    "monthlyFee": 397670,
+    "registeredAt": "2026-10-16T15:17:13.577Z",
+    "lastActiveAt": "2026-10-16T15:17:13.577Z",
+    "technicianSetupDeployed": false
+  }
+]

@@ -1,0 +1,86 @@
+[
+  {
+    "id": "user-1792107056241",
+    "name": "Dr. Chukwuemeka Eze",
+    "email": "admin@christourfoundation.org",
+    "passwordHash": "hospitalpassword",
+    "role": "admin",
+    "tenantId": "tenant-1792107056241",
+    "tenantName": "Christ Our Foundation Specialist Hospital",
+    "mustChangePassword": false,
+    "department": "Hospital Administration",
+    "permissions": {
+      "dispensation": true,
+      "payments": true,
+      "inventory": true,
+      "registration": true,
+      "alerts": true,
+      "audit": true,
+      "staffManagement": true,
+      "accessControl": true
+    }
+  },
+  {
+    "id": "staff-1792107068259",
+    "name": "Pharm. Amaka Obi",
+    "email": "amaka.obi@christourfoundation.org",
+    "passwordHash": "amaka.obi@christourfoundation.org",
+    "role": "pharmacist",
+    "department": "Outpatient Pharmacy",
+    "tenantId": "tenant-1792107056241",
+    "tenantName": "Cloud Server Operations & Console",
+    "mustChangePassword": true,
+    "permissions": {
+      "dispensation": true,
+      "payments": false,
+      "inventory": true,
+      "registration": true,
+      "alerts": true,
+      "audit": false,
+      "staffManagement": false,
+      "accessControl": false
+    }
+  },
+  {
+    "id": "user-1792163016490",
+    "name": "Dr. Mike Okafor",
+    "email": "wesmaster33@gmail.com",
+    "passwordHash": "12345678",
+    "role": "admin",
+    "tenantId": "tenant-1792163016490",
+    "tenantName": "Good Shepherd Hospital",
+    "mustChangePassword": false,
+    "department": "Hospital Administration",
+    "permissions": {
+      "dispensation": true,
+      "payments": true,
+      "inventory": true,
+      "registration": true,
+      "alerts": true,
+      "audit": true,
+      "staffManagement": true,
+      "accessControl": true
+    }
+  },
+  {
+    "id": "user-1792163833577",
+    "name": "Dr. Chucks",
+    "email": "teamfandf16@gmail.com",
+    "passwordHash": "12345678",
+    "role": "admin",
+    "tenantId": "tenant-1792163833577",
+    "tenantName": "Mc'Chucks Diagnostics",
+    "mustChangePassword": false,
+    "department": "Hospital Administration",
+    "permissions": {
+      "dispensation": true,
+      "payments": true,
+      "inventory": true,
+      "registration": true,
+      "alerts": true,
+      "audit": true,
+      "staffManagement": true,
+      "accessControl": true
+    }
+  }
+]

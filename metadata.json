@@ -1,0 +1,6 @@
+{
+  "name": "Hospital e-Manager",
+  "description": "Hospital e-Manager: Multi-tenant clinical pharmacy management system with automated stock alerts, expiry detection, drug registration audit trails, secure JWT auth, POS dispensation, and technician server-side management.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
