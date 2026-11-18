@@ -509,11 +509,17 @@ app.post('/api/developer/reset-password', async (req: Request, res: Response) =>
 
 // Client Facility Registration
 app.post('/api/auth/register-hospital', async (req: Request, res: Response) => {
-  const { hospitalName, fullName, phone, email, password } = req.body;
+  const { hospitalName, fullName, phone, email, password, acceptedPrivacyPolicy, acceptedLegalAgreement } = req.body;
 
   if (!hospitalName || !fullName || !phone || !email || !password) {
     return res.status(400).json({ 
       error: 'All fields (hospital name, full name, phone number, email, and password) are required.' 
+    });
+  }
+
+  if (acceptedPrivacyPolicy !== true || acceptedLegalAgreement !== true) {
+    return res.status(400).json({
+      error: 'You must read and agree to both the Privacy Policy and the Legal Registration Agreement before completing registration.'
     });
   }
 
@@ -529,26 +535,60 @@ app.post('/api/auth/register-hospital', async (req: Request, res: Response) => {
         return res.status(400).json({ error: 'An account with this email address already exists.' });
       }
 
-      await query(
-        `INSERT INTO tenants (
-          id, name, admin_name, admin_phone, admin_email, 
-          contact_email, contact_phone, account_status, subscription_plan, 
-          subscription_status, monthly_fee, registered_at, last_active_at, technician_setup_deployed
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW(), FALSE)`,
-        [
-          tenantId,
-          hospitalName.trim(),
-          fullName.trim(),
-          phone.trim(),
-          normalizedEmail,
-          normalizedEmail,
-          phone.trim(),
-          'pending_setup',
-          'Hospital Pro',
-          'trial',
-          397670
-        ]
-      );
+      try {
+        await query(
+          `INSERT INTO tenants (
+            id, name, admin_name, admin_phone, admin_email, 
+            contact_email, contact_phone, account_status, subscription_plan, 
+            subscription_status, monthly_fee, registered_at, last_active_at, technician_setup_deployed,
+            privacy_policy_accepted, legal_agreement_accepted, agreement_accepted_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW(), FALSE, TRUE, TRUE, NOW())`,
+          [
+            tenantId,
+            hospitalName.trim(),
+            fullName.trim(),
+            phone.trim(),
+            normalizedEmail,
+            normalizedEmail,
+            phone.trim(),
+            'pending_setup',
+            'Hospital Pro',
+            'trial',
+            397670
+          ]
+        );
+      } catch (insertErr: any) {
+        if (insertErr?.code === '42703') {
+          await query(`
+            ALTER TABLE tenants ADD COLUMN IF NOT EXISTS privacy_policy_accepted BOOLEAN DEFAULT FALSE;
+            ALTER TABLE tenants ADD COLUMN IF NOT EXISTS legal_agreement_accepted BOOLEAN DEFAULT FALSE;
+            ALTER TABLE tenants ADD COLUMN IF NOT EXISTS agreement_accepted_at TIMESTAMP WITH TIME ZONE;
+          `);
+          await query(
+            `INSERT INTO tenants (
+              id, name, admin_name, admin_phone, admin_email, 
+              contact_email, contact_phone, account_status, subscription_plan, 
+              subscription_status, monthly_fee, registered_at, last_active_at, technician_setup_deployed,
+              privacy_policy_accepted, legal_agreement_accepted, agreement_accepted_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW(), FALSE, TRUE, TRUE, NOW())`,
+            [
+              tenantId,
+              hospitalName.trim(),
+              fullName.trim(),
+              phone.trim(),
+              normalizedEmail,
+              normalizedEmail,
+              phone.trim(),
+              'pending_setup',
+              'Hospital Pro',
+              'trial',
+              397670
+            ]
+          );
+        } else {
+          throw insertErr;
+        }
+      }
 
       const defaultAdminPermissions = {
         dispensation: true,
@@ -610,6 +650,9 @@ app.post('/api/auth/register-hospital', async (req: Request, res: Response) => {
     registeredAt,
     lastActiveAt: registeredAt,
     technicianSetupDeployed: false,
+    privacyPolicyAccepted: true,
+    legalAgreementAccepted: true,
+    agreementAcceptedAt: registeredAt,
   };
 
   memTenants.push(newTenant);

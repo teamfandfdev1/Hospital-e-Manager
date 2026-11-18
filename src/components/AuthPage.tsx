@@ -17,7 +17,9 @@ import {
   Clock,
   KeyRound,
   Check,
-  AlertCircle
+  AlertCircle,
+  Scale,
+  X
 } from 'lucide-react';
 import { User } from '../types';
 
@@ -45,6 +47,11 @@ export const AuthPage: React.FC<AuthPageProps> = ({
   const [registerPassword, setRegisterPassword] = useState('');
   const [isRegistering, setIsRegistering] = useState(false);
   const [registrationSubmitted, setRegistrationSubmitted] = useState(false);
+
+  // Privacy Policy & Legal Agreement Dialog (shown only after all details are filled & Submit is clicked)
+  const [showLegalModal, setShowLegalModal] = useState(false);
+  const [acceptedPrivacy, setAcceptedPrivacy] = useState(false);
+  const [acceptedLegal, setAcceptedLegal] = useState(false);
 
   // Password Recovery Dialog
   const [showForgotModal, setShowForgotModal] = useState(false);
@@ -84,11 +91,34 @@ export const AuthPage: React.FC<AuthPageProps> = ({
     }
   };
 
-  // Handle Register
-  const handleRegister = async (e: React.FormEvent) => {
+  // Step 1 of Registration: Validate all details are entered, then immediately pop up Privacy Policy & Legal Agreement
+  const handleRegister = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!hospitalName || !fullName || !phone || !registerEmail || !registerPassword) {
+    if (
+      !hospitalName.trim() ||
+      !fullName.trim() ||
+      !phone.trim() ||
+      !registerEmail.trim() ||
+      !registerPassword
+    ) {
       onShowToast('Please fill out all registration fields.', 'warning');
+      return;
+    }
+
+    if (registerPassword.length < 4) {
+      onShowToast('Admin password must be at least 4 characters.', 'warning');
+      return;
+    }
+
+    setAcceptedPrivacy(false);
+    setAcceptedLegal(false);
+    setShowLegalModal(true);
+  };
+
+  // Step 2 of Registration: Complete registration after explicit agreement to Privacy Policy & Legal Agreement
+  const handleCompleteRegistration = async () => {
+    if (!acceptedPrivacy || !acceptedLegal) {
+      onShowToast('Please agree to both the Privacy Policy and Legal Registration Agreement to proceed.', 'warning');
       return;
     }
 
@@ -98,11 +128,13 @@ export const AuthPage: React.FC<AuthPageProps> = ({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          hospitalName,
-          fullName,
-          phone,
-          email: registerEmail,
+          hospitalName: hospitalName.trim(),
+          fullName: fullName.trim(),
+          phone: phone.trim(),
+          email: registerEmail.trim(),
           password: registerPassword,
+          acceptedPrivacyPolicy: true,
+          acceptedLegalAgreement: true,
         }),
       });
       const data = await res.json();
@@ -111,6 +143,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({
         throw new Error(data.error || 'Registration failed.');
       }
 
+      setShowLegalModal(false);
       setRegistrationSubmitted(true);
       onShowToast(data.message || 'Registration submitted successfully.', 'success');
     } catch (err: any) {
@@ -179,18 +212,10 @@ export const AuthPage: React.FC<AuthPageProps> = ({
       {/* Top Bar */}
       <header className="border-b border-slate-800 bg-slate-950/80 backdrop-blur-md px-4 sm:px-8 py-3.5 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl bg-teal-500/20 border border-teal-500/30 flex items-center justify-center text-teal-400">
-            <Building2 className="w-5 h-5" />
-          </div>
           <div>
             <h1 className="text-sm font-bold text-white tracking-tight">Hospital e-Manager</h1>
             <p className="text-[11px] text-teal-400 font-mono">Clinical Pharmacy &amp; Healthcare Workstation</p>
           </div>
-        </div>
-
-        <div className="flex items-center gap-2 text-xs text-slate-400 font-mono">
-          <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
-          <span className="hidden sm:inline">Encrypted Hospital Network</span>
         </div>
       </header>
 
@@ -244,7 +269,6 @@ export const AuthPage: React.FC<AuthPageProps> = ({
                     Email Address
                   </label>
                   <div className="relative">
-                    <Mail className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
                     <input
                       type="email"
                       required
@@ -273,7 +297,6 @@ export const AuthPage: React.FC<AuthPageProps> = ({
                     </button>
                   </div>
                   <div className="relative">
-                    <Lock className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
                     <input
                       type="password"
                       required
@@ -321,13 +344,13 @@ export const AuthPage: React.FC<AuthPageProps> = ({
                     Hospital / Pharmacy Name *
                   </label>
                   <div className="relative">
-                    <Building2 className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                    
                     <input
                       type="text"
                       required
                       value={hospitalName}
                       onChange={(e) => setHospitalName(e.target.value)}
-                      placeholder="e.g. St. Jude Regional Hospital"
+                      placeholder="your business name here"
                       className="w-full pl-9 pr-3.5 py-2 bg-slate-900 border border-slate-700 rounded-lg text-xs text-white placeholder-slate-500 focus:outline-hidden focus:ring-2 focus:ring-teal-500"
                     />
                   </div>
@@ -335,16 +358,15 @@ export const AuthPage: React.FC<AuthPageProps> = ({
 
                 <div>
                   <label className="block text-xs font-semibold text-slate-300 mb-1">
-                    Client&apos;s Full Name *
+                    Your Full Name *
                   </label>
                   <div className="relative">
-                    <UserIcon className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
                     <input
                       type="text"
                       required
                       value={fullName}
                       onChange={(e) => setFullName(e.target.value)}
-                      placeholder="e.g. Dr. Sarah Al-Mansoor"
+                      placeholder="your full name here"
                       className="w-full pl-9 pr-3.5 py-2 bg-slate-900 border border-slate-700 rounded-lg text-xs text-white placeholder-slate-500 focus:outline-hidden focus:ring-2 focus:ring-teal-500"
                     />
                   </div>
@@ -355,13 +377,12 @@ export const AuthPage: React.FC<AuthPageProps> = ({
                     Active Phone Number *
                   </label>
                   <div className="relative">
-                    <Phone className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
                     <input
                       type="tel"
                       required
                       value={phone}
                       onChange={(e) => setPhone(e.target.value)}
-                      placeholder="+234 803 123 4567"
+                      placeholder="+234 xxx xxx xxxx"
                       className="w-full pl-9 pr-3.5 py-2 bg-slate-900 border border-slate-700 rounded-lg text-xs text-white placeholder-slate-500 focus:outline-hidden focus:ring-2 focus:ring-teal-500"
                     />
                   </div>
@@ -372,7 +393,6 @@ export const AuthPage: React.FC<AuthPageProps> = ({
                     Email Address *
                   </label>
                   <div className="relative">
-                    <Mail className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
                     <input
                       type="email"
                       required
@@ -388,12 +408,11 @@ export const AuthPage: React.FC<AuthPageProps> = ({
                   <label className="block text-xs font-semibold text-slate-300 mb-1">
                     Create Admin Account Password *
                   </label>
-                  <div className="relative">
-                    <Lock className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <div className="relative">  
                     <input
                       type="password"
                       required
-                      minLength={4}
+                      minLength={6}
                       value={registerPassword}
                       onChange={(e) => setRegisterPassword(e.target.value)}
                       placeholder="••••••••"
@@ -715,9 +734,153 @@ export const AuthPage: React.FC<AuthPageProps> = ({
         </div>
       )}
 
+      {/* Privacy Policy & Legal Business Registration Agreement Modal */}
+      {showLegalModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-start sm:items-center justify-center bg-slate-950/85 backdrop-blur-xs p-2 sm:p-4 overflow-y-auto"
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !isRegistering) {
+              setShowLegalModal(false);
+            }
+          }}
+        >
+          <div
+            className="bg-slate-900 border border-slate-700/80 rounded-2xl max-w-2xl w-full shadow-2xl overflow-hidden flex flex-col max-h-[calc(100dvh-1rem)] sm:max-h-[88vh] my-2 sm:my-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div className="sticky top-0 z-10 bg-slate-950 border-b border-slate-800 px-4 py-3.5 sm:px-6 flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="min-w-0">
+                  <h3 className="text-sm sm:text-base font-bold text-white tracking-tight truncate">
+                    Privacy Policy &amp; Legal Compliance Agreement
+                  </h3>
+                  <p className="text-[11px] text-slate-400 truncate">
+                    Required before completing registration for <span className="text-teal-300 font-semibold">{hospitalName}</span>
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                disabled={isRegistering}
+                onClick={() => setShowLegalModal(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer shrink-0 ml-2 disabled:opacity-50"
+                aria-label="Close agreement dialog"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Scrollable Legal & Privacy Content */}
+            <div className="p-4 sm:p-6 space-y-4 overflow-y-auto flex-1 min-h-0 text-xs text-slate-300 leading-relaxed bg-slate-900/70">
+              {/* 1. Privacy Policy */}
+              <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-4 space-y-2.5">
+                <div className="flex items-center gap-2 text-teal-400 font-bold text-xs uppercase tracking-wider">
+                  
+                  <span>Privacy Policy &amp; Security</span>
+                </div>
+                <p className="text-slate-300">
+                  Hospital e-Manager is committed to safeguarding the confidentiality, integrity, and availability of your facility&apos;s clinical, operational, and staff data:
+                </p>
+                <ul className="space-y-1.5 text-[11px] text-slate-400 list-disc pl-4">
+                  <li>
+                    <strong className="text-slate-200">Strict Multi-Tenant Isolation:</strong> Your hospital or pharmacy operates within an isolated tenant workspace. Formulary inventories, batch numbers, patient dispensation orders, and revenue records are logically partitioned and inaccessible to any other facility.
+                  </li>
+                  <li>
+                    <strong className="text-slate-200">Encryption &amp; Access Controls:</strong> All data in transit is secured over encrypted HTTPS/TLS channels. Access is authenticated via signed session tokens and governed strictly by Role-Based Access Control (RBAC) managed by your designated facility administrator.
+                  </li>
+                  <li>
+                    <strong className="text-slate-200">Data Ownership &amp; Purpose Limitation:</strong> Your facility retains full ownership of all uploaded formulary, prescription, and audit data. Data is processed exclusively for inventory management, dispensing workflows, billing authorization, expiry monitoring, and compliance auditing—never sold or shared with third-party advertisers.
+                  </li>
+                  <li>
+                    <strong className="text-slate-200">Immutable Audit Logs:</strong> Critical actions—including medication registration, payment approval, dispensation finalization, and voids—are logged with user attribution and timestamps to prevent tampering and support regulatory audits.
+                  </li>
+                </ul>
+              </div>
+
+              {/* 2. Legal Business Registration Agreement */}
+              <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-4 space-y-2.5">
+                <div className="flex items-center gap-2 text-amber-400 font-bold text-xs uppercase tracking-wider">
+                  <span>Legal Registration &amp; Regulatory Compliance Agreement</span>
+                </div>
+                <p className="text-slate-300">
+                  By proceeding with registration on behalf of <strong className="text-white">{hospitalName}</strong>, you legally represent and warrant that:
+                </p>
+                <ul className="space-y-1.5 text-[11px] text-slate-400 list-disc pl-4">
+                  <li>
+                    <strong className="text-slate-200">Legally Registered Business Entity:</strong> Your organization is a legally incorporated and registered business, hospital, clinic, or pharmacy in good standing under applicable local, state, and national laws.
+                  </li>
+                  <li>
+                    <strong className="text-slate-200">Valid Healthcare &amp; Pharmacy Licensing:</strong> Your facility holds active, valid regulatory permits and pharmaceutical licenses required to procure, store, and dispense medications, including controlled substances where applicable.
+                  </li>
+                  <li>
+                    <strong className="text-slate-200">Authorized Representative &amp; Verification:</strong> <strong className="text-slate-200">{fullName}</strong> is duly authorized to register this facility and agrees to cooperate with license verification during onboarding before full clinical activation.
+                  </li>
+                </ul>
+              </div>
+
+              {/* Mandatory Consent Checkboxes */}
+              <div className="space-y-2.5 pt-1">
+                <label className="flex items-start gap-3 p-3 rounded-xl bg-slate-950 border border-slate-800 hover:border-teal-700/60 transition-colors cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={acceptedPrivacy}
+                    onChange={(e) => setAcceptedPrivacy(e.target.checked)}
+                    className="mt-0.5 w-4 h-4 rounded border-slate-600 bg-slate-900 text-teal-600 focus:ring-teal-500 cursor-pointer shrink-0"
+                  />
+                  <span className="text-xs text-slate-200 leading-snug">
+                    I have read and agree to the <strong className="text-teal-400">Privacy Policy</strong> regarding how facility, staff, and clinical data is handled, isolated, and secured.
+                  </span>
+                </label>
+
+                <label className="flex items-start gap-3 p-3 rounded-xl bg-slate-950 border border-slate-800 hover:border-amber-600/60 transition-colors cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={acceptedLegal}
+                    onChange={(e) => setAcceptedLegal(e.target.checked)}
+                    className="mt-0.5 w-4 h-4 rounded border-slate-600 bg-slate-900 text-teal-600 focus:ring-teal-500 cursor-pointer shrink-0"
+                  />
+                  <span className="text-xs text-slate-200 leading-snug">
+                    I legally confirm that <strong className="text-white">{hospitalName}</strong> is a <strong className="text-amber-300">legally registered and licensed business/healthcare facility</strong>, and I agree to the Legal Compliance Agreement.
+                  </span>
+                </label>
+              </div>
+            </div>
+
+            {/* Sticky Modal Footer */}
+            <div className="bg-slate-950 border-t border-slate-800 px-4 py-3 sm:px-6 flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-end gap-2.5 shrink-0">
+              <button
+                type="button"
+                disabled={isRegistering}
+                onClick={() => setShowLegalModal(false)}
+                className="px-4 py-2 rounded-lg text-xs font-semibold text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 border border-slate-700 transition-colors cursor-pointer disabled:opacity-50"
+              >
+                Cancel &amp; Edit Details
+              </button>
+              <button
+                type="button"
+                disabled={!acceptedPrivacy || !acceptedLegal || isRegistering}
+                onClick={handleCompleteRegistration}
+                className="px-5 py-2 rounded-lg text-xs font-bold text-white bg-teal-600 hover:bg-teal-500 disabled:bg-slate-700 disabled:text-slate-400 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-2 cursor-pointer shadow-md"
+              >
+                {isRegistering ? (
+                  <span>Completing Registration...</span>
+                ) : (
+                  <>
+                    <CheckCircle2 className="w-4 h-4" />
+                    <span>Agree &amp; Complete Registration</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Clean Footer (No site URL or DB name, per prompt requirement) */}
       <footer className="border-t border-slate-800/60 py-4 text-center text-xs text-slate-500">
-        Hospital e-Manager &copy; {new Date().getFullYear()} Clinical Pharmacy Platform. All rights reserved.
+        Hospital e-Manager by Team F&F &copy; {new Date().getFullYear()} Clinical Pharmacy Platform. All rights reserved.
       </footer>
     </div>
   );

@@ -789,7 +789,7 @@ export default function App() {
           {/* Minimalist Footer: Prompt requirement: "In the footer, remove the site URL and the database name, they are unnecessary." */}
           <footer className="bg-white border-t border-slate-200/80 text-slate-500 text-xs py-3 px-4 sm:px-6 mt-auto flex flex-col sm:flex-row items-center justify-between gap-2">
             <div className="flex items-center gap-2">
-              <span className="font-bold text-slate-900">Hospital e-Manager</span>
+              <span className="font-bold text-slate-900">Hospital e-Manager by Team F&F</span>
             </div>
 
             <div className="flex items-center gap-3">

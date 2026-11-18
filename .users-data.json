@@ -82,5 +82,26 @@
       "staffManagement": true,
       "accessControl": true
     }
+  },
+  {
+    "id": "user-1795003354402",
+    "name": "Dr. Emeka Obi",
+    "email": "emeka.obi@gmail.com",
+    "passwordHash": "12345678",
+    "role": "admin",
+    "tenantId": "tenant-1795003354402",
+    "tenantName": "Sim Plus Hospital",
+    "mustChangePassword": false,
+    "department": "Hospital Administration",
+    "permissions": {
+      "dispensation": true,
+      "payments": true,
+      "inventory": true,
+      "registration": true,
+      "alerts": true,
+      "audit": true,
+      "staffManagement": true,
+      "accessControl": true
+    }
   }
 ]

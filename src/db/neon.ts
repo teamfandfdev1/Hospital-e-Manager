@@ -273,6 +273,9 @@ export async function initDatabase(): Promise<boolean> {
       ALTER TABLE tenants ADD COLUMN IF NOT EXISTS subscription_plan VARCHAR(100) DEFAULT 'Hospital Pro';
       ALTER TABLE tenants ADD COLUMN IF NOT EXISTS subscription_status VARCHAR(50) DEFAULT 'trial';
       ALTER TABLE tenants ADD COLUMN IF NOT EXISTS monthly_fee NUMERIC(12, 2) DEFAULT 397670.00;
+      ALTER TABLE tenants ADD COLUMN IF NOT EXISTS privacy_policy_accepted BOOLEAN DEFAULT FALSE;
+      ALTER TABLE tenants ADD COLUMN IF NOT EXISTS legal_agreement_accepted BOOLEAN DEFAULT FALSE;
+      ALTER TABLE tenants ADD COLUMN IF NOT EXISTS agreement_accepted_at TIMESTAMP WITH TIME ZONE;
 
       ALTER TABLE dispensation_orders ADD COLUMN IF NOT EXISTS tenant_id VARCHAR(64);
       ALTER TABLE dispensation_orders ADD COLUMN IF NOT EXISTS order_number VARCHAR(50);

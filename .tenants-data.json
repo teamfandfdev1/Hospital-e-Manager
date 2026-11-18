@@ -49,5 +49,25 @@
     "registeredAt": "2026-10-16T15:17:13.577Z",
     "lastActiveAt": "2026-10-16T15:17:13.577Z",
     "technicianSetupDeployed": false
+  },
+  {
+    "id": "tenant-1795003354402",
+    "name": "Sim Plus Hospital",
+    "adminName": "Dr. Emeka Obi",
+    "adminPhone": "08033123456",
+    "adminEmail": "emeka.obi@gmail.com",
+    "contactEmail": "emeka.obi@gmail.com",
+    "contactPhone": "08033123456",
+    "type": "General Hospital",
+    "accountStatus": "pending_setup",
+    "subscriptionPlan": "Hospital Pro",
+    "subscriptionStatus": "trial",
+    "monthlyFee": 397670,
+    "registeredAt": "2026-11-18T12:02:34.402Z",
+    "lastActiveAt": "2026-11-18T12:02:34.402Z",
+    "technicianSetupDeployed": false,
+    "privacyPolicyAccepted": true,
+    "legalAgreementAccepted": true,
+    "agreementAcceptedAt": "2026-11-18T12:02:34.402Z"
   }
 ]

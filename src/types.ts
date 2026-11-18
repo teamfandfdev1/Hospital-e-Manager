@@ -169,6 +169,9 @@ export interface TenantHospital {
   technicianSetupDeployed?: boolean;
   technicianDeployedAt?: string;
   technicianNotes?: string;
+  privacyPolicyAccepted?: boolean;
+  legalAgreementAccepted?: boolean;
+  agreementAcceptedAt?: string;
 }
 
 export interface StaffAccount {
