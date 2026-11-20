@@ -99,6 +99,24 @@ export interface DispensationLineItem {
   totalPrice: number;
 }
 
+export type PaymentMethod = 'Cash' | 'Credit/Debit Card' | 'Health Insurance' | 'Mobile Transfer';
+
+export interface PaymentEntry {
+  id: string;
+  method: PaymentMethod;
+  amount: number;
+  reference?: string;
+  recordedAt: string;
+  recordedBy?: string;
+}
+
+export interface ApprovePaymentPayload {
+  paymentMethod?: string;
+  payments: PaymentEntry[];
+  discount: number;
+  discountReason?: string;
+}
+
 export interface DispensationOrder {
   id: string;
   tenantId: string;
@@ -112,6 +130,7 @@ export interface DispensationOrder {
   subtotal: number;
   tax: number;
   discount: number;
+  discountReason?: string;
   totalAmount: number;
   status: 'pending_payment' | 'payment_approved' | 'dispensed' | 'cancelled';
   createdBy: string;
@@ -119,7 +138,11 @@ export interface DispensationOrder {
   createdAt: string;
   paymentApprovedBy?: string;
   paymentApprovedAt?: string;
-  paymentMethod?: 'Cash' | 'Credit/Debit Card' | 'Health Insurance' | 'Mobile Transfer';
+  paymentMethod?: string;
+  payments?: PaymentEntry[];
+  amountPaid?: number;
+  balanceDue?: number;
+  paymentStatus?: 'unpaid' | 'partial' | 'paid';
   finalizedBy?: string;
   finalizedAt?: string;
 }
@@ -137,8 +160,13 @@ export interface DispensationRecord {
   subtotal: number;
   tax: number;
   discount: number;
+  discountReason?: string;
   totalAmount: number;
-  paymentMethod: 'Cash' | 'Credit/Debit Card' | 'Health Insurance' | 'Mobile Transfer';
+  paymentMethod: string;
+  payments?: PaymentEntry[];
+  amountPaid?: number;
+  balanceDue?: number;
+  paymentStatus?: 'paid' | 'partial' | 'unpaid';
   dispensedBy: string; // Pharmacist
   dispensedByRole: UserRole;
   dispensedAt: string;

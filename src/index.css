@@ -42,5 +42,30 @@
     background: white !important;
     color: black !important;
   }
+  body.printing-receipt * {
+    visibility: hidden !important;
+  }
+  body.printing-receipt .printable-receipt-root,
+  body.printing-receipt .printable-receipt-root * {
+    visibility: visible !important;
+  }
+  body.printing-receipt .printable-receipt-root {
+    position: fixed !important;
+    top: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    width: 100% !important;
+    max-width: 90mm !important;
+    margin: 0 auto !important;
+    padding: 12px !important;
+    background: white !important;
+    color: #000 !important;
+    box-shadow: none !important;
+    border: none !important;
+    overflow: visible !important;
+    z-index: 99999 !important;
+  }
 }
+
+
 

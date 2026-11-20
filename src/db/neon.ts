@@ -160,9 +160,14 @@ export async function initDatabase(): Promise<boolean> {
         subtotal NUMERIC(12, 2) NOT NULL,
         tax NUMERIC(12, 2) DEFAULT 0,
         discount NUMERIC(12, 2) DEFAULT 0,
+        discount_reason TEXT,
         total_amount NUMERIC(12, 2) NOT NULL,
         status VARCHAR(50) DEFAULT 'pending_payment',
-        payment_method VARCHAR(50),
+        payment_method VARCHAR(255),
+        payments JSONB DEFAULT '[]'::jsonb,
+        amount_paid NUMERIC(12, 2) DEFAULT 0,
+        balance_due NUMERIC(12, 2) DEFAULT 0,
+        payment_status VARCHAR(30) DEFAULT 'unpaid',
         created_by VARCHAR(255) NOT NULL,
         created_by_role VARCHAR(50),
         payment_approved_by VARCHAR(255),
@@ -175,6 +180,7 @@ export async function initDatabase(): Promise<boolean> {
       CREATE TABLE IF NOT EXISTS dispensation_records (
         id VARCHAR(64) PRIMARY KEY,
         tenant_id VARCHAR(64) REFERENCES tenants(id) ON DELETE CASCADE,
+        order_id VARCHAR(64),
         receipt_number VARCHAR(50) NOT NULL UNIQUE,
         patient_name VARCHAR(255) NOT NULL,
         patient_age INTEGER,
@@ -185,8 +191,13 @@ export async function initDatabase(): Promise<boolean> {
         subtotal NUMERIC(12, 2) NOT NULL,
         tax NUMERIC(12, 2) DEFAULT 0,
         discount NUMERIC(12, 2) DEFAULT 0,
+        discount_reason TEXT,
         total_amount NUMERIC(12, 2) NOT NULL,
-        payment_method VARCHAR(50) NOT NULL,
+        payment_method VARCHAR(255) NOT NULL,
+        payments JSONB DEFAULT '[]'::jsonb,
+        amount_paid NUMERIC(12, 2) DEFAULT 0,
+        balance_due NUMERIC(12, 2) DEFAULT 0,
+        payment_status VARCHAR(30) DEFAULT 'paid',
         dispensed_by VARCHAR(255) NOT NULL,
         dispensed_by_role VARCHAR(50),
         payment_approved_by VARCHAR(255),
@@ -290,7 +301,7 @@ export async function initDatabase(): Promise<boolean> {
       ALTER TABLE dispensation_orders ADD COLUMN IF NOT EXISTS discount NUMERIC(12, 2) DEFAULT 0;
       ALTER TABLE dispensation_orders ADD COLUMN IF NOT EXISTS total_amount NUMERIC(12, 2);
       ALTER TABLE dispensation_orders ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'pending_payment';
-      ALTER TABLE dispensation_orders ADD COLUMN IF NOT EXISTS payment_method VARCHAR(50);
+      ALTER TABLE dispensation_orders ADD COLUMN IF NOT EXISTS payment_method VARCHAR(255);
       ALTER TABLE dispensation_orders ADD COLUMN IF NOT EXISTS created_by VARCHAR(255);
       ALTER TABLE dispensation_orders ADD COLUMN IF NOT EXISTS created_by_role VARCHAR(50);
       ALTER TABLE dispensation_orders ADD COLUMN IF NOT EXISTS payment_approved_by VARCHAR(255);
@@ -311,7 +322,7 @@ export async function initDatabase(): Promise<boolean> {
       ALTER TABLE dispensation_records ADD COLUMN IF NOT EXISTS tax NUMERIC(12, 2) DEFAULT 0;
       ALTER TABLE dispensation_records ADD COLUMN IF NOT EXISTS discount NUMERIC(12, 2) DEFAULT 0;
       ALTER TABLE dispensation_records ADD COLUMN IF NOT EXISTS total_amount NUMERIC(12, 2);
-      ALTER TABLE dispensation_records ADD COLUMN IF NOT EXISTS payment_method VARCHAR(50);
+      ALTER TABLE dispensation_records ADD COLUMN IF NOT EXISTS payment_method VARCHAR(255);
       ALTER TABLE dispensation_records ADD COLUMN IF NOT EXISTS dispensed_by VARCHAR(255);
       ALTER TABLE dispensation_records ADD COLUMN IF NOT EXISTS dispensed_by_role VARCHAR(50);
       ALTER TABLE dispensation_records ADD COLUMN IF NOT EXISTS payment_approved_by VARCHAR(255);
@@ -353,6 +364,31 @@ export async function initDatabase(): Promise<boolean> {
       ALTER TABLE developer_config ADD COLUMN IF NOT EXISTS is_configured BOOLEAN DEFAULT FALSE;
       ALTER TABLE developer_config ADD COLUMN IF NOT EXISTS created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP;
     `);
+
+    // Fault-tolerant incremental migrations for partial payments, discounts, and order linkage
+    const incrementalMigrations = [
+      `ALTER TABLE dispensation_orders ADD COLUMN IF NOT EXISTS discount_reason TEXT`,
+      `ALTER TABLE dispensation_orders ADD COLUMN IF NOT EXISTS payments JSONB DEFAULT '[]'::jsonb`,
+      `ALTER TABLE dispensation_orders ADD COLUMN IF NOT EXISTS amount_paid NUMERIC(12, 2) DEFAULT 0`,
+      `ALTER TABLE dispensation_orders ADD COLUMN IF NOT EXISTS balance_due NUMERIC(12, 2) DEFAULT 0`,
+      `ALTER TABLE dispensation_orders ADD COLUMN IF NOT EXISTS payment_status VARCHAR(30) DEFAULT 'unpaid'`,
+      `ALTER TABLE dispensation_orders ALTER COLUMN payment_method TYPE VARCHAR(255)`,
+      `ALTER TABLE dispensation_records ADD COLUMN IF NOT EXISTS order_id VARCHAR(64)`,
+      `ALTER TABLE dispensation_records ADD COLUMN IF NOT EXISTS discount_reason TEXT`,
+      `ALTER TABLE dispensation_records ADD COLUMN IF NOT EXISTS payments JSONB DEFAULT '[]'::jsonb`,
+      `ALTER TABLE dispensation_records ADD COLUMN IF NOT EXISTS amount_paid NUMERIC(12, 2) DEFAULT 0`,
+      `ALTER TABLE dispensation_records ADD COLUMN IF NOT EXISTS balance_due NUMERIC(12, 2) DEFAULT 0`,
+      `ALTER TABLE dispensation_records ADD COLUMN IF NOT EXISTS payment_status VARCHAR(30) DEFAULT 'paid'`,
+      `ALTER TABLE dispensation_records ALTER COLUMN payment_method TYPE VARCHAR(255)`,
+    ];
+    for (const stmt of incrementalMigrations) {
+      try {
+        await query(stmt);
+      } catch (migErr: any) {
+        console.warn('[Database] Incremental migration notice:', stmt, migErr?.message || migErr);
+      }
+    }
+
     console.log('[Database] Neon PostgreSQL initialized successfully. Tables and schema columns migrated.');
     isConnectedToNeon = true;
     return true;

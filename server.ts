@@ -13,7 +13,8 @@ import {
   UserRole, 
   User, 
   StaffAccount,
-  BatchItem
+  BatchItem,
+  PaymentEntry
 } from './src/types';
 import { pool, query, isConnectedToNeon, initDatabase } from './src/db/neon';
 import { sendPasswordRecoveryEmail } from './src/services/mailer';
@@ -22,6 +23,12 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
+app.disable('x-powered-by');
+app.use((_req: Request, res: Response, next: NextFunction) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  next();
+});
 const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'pharmpulse-super-secure-production-jwt-key-2026';
 
@@ -1669,6 +1676,51 @@ app.post('/api/drugs', authenticateToken, verifyTenantActive, async (req: Authen
 /* DISPENSATION ORDERS & PAYMENTS MODULE WORKFLOW                             */
 /* ========================================================================== */
 
+function safeJsonParse<T>(val: any, fallback: T): T {
+  if (val === null || val === undefined) return fallback;
+  if (typeof val !== 'string') return val as T;
+  try {
+    return JSON.parse(val) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+let dispensationColumnsEnsured = false;
+async function ensureDispensationColumns(force = false) {
+  if (!isConnectedToNeon) return;
+  if (dispensationColumnsEnsured && !force) return;
+  const statements = [
+    `ALTER TABLE dispensation_orders ADD COLUMN IF NOT EXISTS discount_reason TEXT`,
+    `ALTER TABLE dispensation_orders ADD COLUMN IF NOT EXISTS payments JSONB DEFAULT '[]'::jsonb`,
+    `ALTER TABLE dispensation_orders ADD COLUMN IF NOT EXISTS amount_paid NUMERIC(12, 2) DEFAULT 0`,
+    `ALTER TABLE dispensation_orders ADD COLUMN IF NOT EXISTS balance_due NUMERIC(12, 2) DEFAULT 0`,
+    `ALTER TABLE dispensation_orders ADD COLUMN IF NOT EXISTS payment_status VARCHAR(30) DEFAULT 'unpaid'`,
+    `ALTER TABLE dispensation_orders ALTER COLUMN payment_method TYPE VARCHAR(255)`,
+    `ALTER TABLE dispensation_records ADD COLUMN IF NOT EXISTS order_id VARCHAR(64)`,
+    `ALTER TABLE dispensation_records ADD COLUMN IF NOT EXISTS discount_reason TEXT`,
+    `ALTER TABLE dispensation_records ADD COLUMN IF NOT EXISTS dispensed_by VARCHAR(255)`,
+    `ALTER TABLE dispensation_records ADD COLUMN IF NOT EXISTS dispensed_by_role VARCHAR(50)`,
+    `ALTER TABLE dispensation_records ADD COLUMN IF NOT EXISTS payment_approved_by VARCHAR(255)`,
+    `ALTER TABLE dispensation_records ADD COLUMN IF NOT EXISTS payment_method VARCHAR(255)`,
+    `ALTER TABLE dispensation_records ALTER COLUMN payment_method TYPE VARCHAR(255)`,
+    `ALTER TABLE dispensation_records ADD COLUMN IF NOT EXISTS payments JSONB DEFAULT '[]'::jsonb`,
+    `ALTER TABLE dispensation_records ADD COLUMN IF NOT EXISTS amount_paid NUMERIC(12, 2) DEFAULT 0`,
+    `ALTER TABLE dispensation_records ADD COLUMN IF NOT EXISTS balance_due NUMERIC(12, 2) DEFAULT 0`,
+    `ALTER TABLE dispensation_records ADD COLUMN IF NOT EXISTS payment_status VARCHAR(30) DEFAULT 'paid'`,
+    `ALTER TABLE dispensation_records ADD COLUMN IF NOT EXISTS void_reason TEXT`,
+    `ALTER TABLE dispensation_records ADD COLUMN IF NOT EXISTS voided_at TIMESTAMP WITH TIME ZONE`,
+  ];
+  for (const stmt of statements) {
+    try {
+      await query(stmt);
+    } catch (err: any) {
+      console.warn('[DB Migration Notice]', stmt, err?.message || err);
+    }
+  }
+  dispensationColumnsEnsured = true;
+}
+
 // Get all orders for the hospital
 app.get('/api/dispensations/orders', authenticateToken, verifyTenantActive, async (req: AuthenticatedRequest, res: Response) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
@@ -1681,30 +1733,53 @@ app.get('/api/dispensations/orders', authenticateToken, verifyTenantActive, asyn
         'SELECT * FROM dispensation_orders WHERE tenant_id = $1 ORDER BY created_at DESC',
         [tenantId]
       );
-      const mapped: DispensationOrder[] = rows.map(r => ({
-        id: r.id,
-        tenantId: r.tenant_id,
-        orderNumber: r.order_number,
-        patientName: r.patient_name,
-        patientAge: r.patient_age ? Number(r.patient_age) : undefined,
-        patientContact: r.patient_contact,
-        prescribingDoctor: r.prescribing_doctor,
-        prescriptionNumber: r.prescription_number,
-        items: typeof r.items === 'string' ? JSON.parse(r.items) : r.items,
-        subtotal: Number(r.subtotal),
-        tax: Number(r.tax),
-        discount: Number(r.discount),
-        totalAmount: Number(r.total_amount),
-        status: r.status,
-        paymentMethod: r.payment_method,
-        createdBy: r.created_by,
-        createdByRole: r.created_by_role,
-        paymentApprovedBy: r.payment_approved_by,
-        paymentApprovedAt: r.payment_approved_at ? new Date(r.payment_approved_at).toISOString() : undefined,
-        finalizedBy: r.finalized_by,
-        finalizedAt: r.finalized_at ? new Date(r.finalized_at).toISOString() : undefined,
-        createdAt: r.created_at ? new Date(r.created_at).toISOString() : new Date().toISOString(),
-      }));
+      const mapped: DispensationOrder[] = rows.map(r => {
+        const parsedPayments: PaymentEntry[] = r.payments
+          ? (typeof r.payments === 'string' ? JSON.parse(r.payments) : r.payments)
+          : [];
+        const totalAmt = Number(r.total_amount);
+        const amtPaid = r.amount_paid !== null && r.amount_paid !== undefined
+          ? Number(r.amount_paid)
+          : (r.status === 'pending_payment' ? 0 : totalAmt);
+        const balDue = r.balance_due !== null && r.balance_due !== undefined
+          ? Number(r.balance_due)
+          : Number(Math.max(0, totalAmt - amtPaid).toFixed(2));
+        const payStatus = r.payment_status || (
+          r.status === 'pending_payment'
+            ? 'unpaid'
+            : (balDue > 0 ? (amtPaid > 0 ? 'partial' : 'unpaid') : 'paid')
+        );
+
+        return {
+          id: r.id,
+          tenantId: r.tenant_id,
+          orderNumber: r.order_number,
+          patientName: r.patient_name,
+          patientAge: r.patient_age ? Number(r.patient_age) : undefined,
+          patientContact: r.patient_contact,
+          prescribingDoctor: r.prescribing_doctor,
+          prescriptionNumber: r.prescription_number,
+          items: typeof r.items === 'string' ? JSON.parse(r.items) : r.items,
+          subtotal: Number(r.subtotal),
+          tax: Number(r.tax),
+          discount: Number(r.discount),
+          discountReason: r.discount_reason || undefined,
+          totalAmount: totalAmt,
+          status: r.status,
+          paymentMethod: r.payment_method,
+          payments: Array.isArray(parsedPayments) ? parsedPayments : [],
+          amountPaid: amtPaid,
+          balanceDue: balDue,
+          paymentStatus: payStatus,
+          createdBy: r.created_by,
+          createdByRole: r.created_by_role,
+          paymentApprovedBy: r.payment_approved_by,
+          paymentApprovedAt: r.payment_approved_at ? new Date(r.payment_approved_at).toISOString() : undefined,
+          finalizedBy: r.finalized_by,
+          finalizedAt: r.finalized_at ? new Date(r.finalized_at).toISOString() : undefined,
+          createdAt: r.created_at ? new Date(r.created_at).toISOString() : new Date().toISOString(),
+        };
+      });
       return res.json({ orders: mapped });
     } catch (e) {
       console.warn('[DB Error] get dispensation orders Neon:', e);
@@ -1733,9 +1808,9 @@ app.post('/api/dispensations/orders', authenticateToken, verifyTenantActive, asy
   }
 
   const subtotal = items.reduce((sum: number, it: any) => sum + (it.totalPrice || (it.unitPrice * it.quantity)), 0);
-  const tax = Number((subtotal * 0.05).toFixed(2));
+  const tax = 0;
   const discount = Number(discountAmount) || 0;
-  const totalAmount = Number(Math.max(0, subtotal + tax - discount).toFixed(2));
+  const totalAmount = Number(Math.max(0, subtotal - discount).toFixed(2));
 
   const orderNumber = `ORD-${Date.now().toString().slice(-6)}`;
   const orderId = `order-${Date.now()}`;
@@ -1756,6 +1831,10 @@ app.post('/api/dispensations/orders', authenticateToken, verifyTenantActive, asy
     discount,
     totalAmount,
     status: 'pending_payment',
+    payments: [],
+    amountPaid: 0,
+    balanceDue: totalAmount,
+    paymentStatus: 'unpaid',
     createdBy: req.user?.name || 'Dispenser',
     createdByRole: req.user?.role || 'pharmacist',
     createdAt,
@@ -1839,42 +1918,198 @@ app.post('/api/dispensations/orders', authenticateToken, verifyTenantActive, asy
   });
 });
 
-// Step 2: Cashier Approves Payment in Payments Module
+// Step 2: Cashier Approves / Finalizes Payment in Payments Module (supports stacked partial payments, incomplete payments, and discounts)
 app.post('/api/dispensations/orders/:id/approve-payment', authenticateToken, verifyTenantActive, async (req: AuthenticatedRequest, res: Response) => {
   const tenantId = req.user?.tenantId || 'tenant-default';
   const { id } = req.params;
-  const { paymentMethod } = req.body;
+  const { paymentMethod, payments, discount, discountReason } = req.body;
   const approvedBy = req.user?.name || 'Cashier Desk';
-  const approvedMethod = paymentMethod || 'Cash';
+  const nowIso = new Date().toISOString();
 
+  // Locate existing order (Neon first, then memory)
+  let order: DispensationOrder | undefined;
   if (isConnectedToNeon) {
     try {
-      await query(
-        `UPDATE dispensation_orders 
-         SET status = 'payment_approved', 
-             payment_approved_by = $1, 
-             payment_approved_at = NOW(), 
-             payment_method = $2 
-         WHERE id = $3 AND tenant_id = $4`,
-        [approvedBy, approvedMethod, id, tenantId]
-      );
+      const rows = await query<any>('SELECT * FROM dispensation_orders WHERE id = $1 AND tenant_id = $2', [id, tenantId]);
+      if (rows.length > 0) {
+        const r = rows[0];
+        const parsedPayments: PaymentEntry[] = r.payments
+          ? (typeof r.payments === 'string' ? JSON.parse(r.payments) : r.payments)
+          : [];
+        order = {
+          id: r.id,
+          tenantId: r.tenant_id,
+          orderNumber: r.order_number,
+          patientName: r.patient_name,
+          patientAge: r.patient_age ? Number(r.patient_age) : undefined,
+          patientContact: r.patient_contact,
+          prescribingDoctor: r.prescribing_doctor,
+          prescriptionNumber: r.prescription_number,
+          items: typeof r.items === 'string' ? JSON.parse(r.items) : r.items,
+          subtotal: Number(r.subtotal),
+          tax: Number(r.tax),
+          discount: Number(r.discount || 0),
+          discountReason: r.discount_reason || undefined,
+          totalAmount: Number(r.total_amount),
+          status: r.status,
+          paymentMethod: r.payment_method,
+          payments: Array.isArray(parsedPayments) ? parsedPayments : [],
+          amountPaid: Number(r.amount_paid || 0),
+          balanceDue: Number(r.balance_due || 0),
+          paymentStatus: r.payment_status || 'unpaid',
+          createdBy: r.created_by,
+          createdByRole: r.created_by_role,
+          paymentApprovedBy: r.payment_approved_by,
+          paymentApprovedAt: r.payment_approved_at ? new Date(r.payment_approved_at).toISOString() : undefined,
+          finalizedBy: r.finalized_by,
+          finalizedAt: r.finalized_at ? new Date(r.finalized_at).toISOString() : undefined,
+          createdAt: r.created_at ? new Date(r.created_at).toISOString() : nowIso,
+        };
+      }
     } catch (e) {
-      console.warn('[DB Error] approve payment Neon:', e);
+      console.warn('[DB Error] fetch order for approve-payment Neon:', e);
     }
   }
 
-  const orders = memDispensationOrders[tenantId] || [];
-  const order = orders.find(o => o.id === id);
+  const memOrders = memDispensationOrders[tenantId] || [];
+  const memOrder = memOrders.find(o => o.id === id);
+  if (!order) order = memOrder;
 
-  if (order) {
-    order.status = 'payment_approved';
-    order.paymentApprovedBy = approvedBy;
-    order.paymentApprovedAt = new Date().toISOString();
-    order.paymentMethod = approvedMethod;
+  if (!order) {
+    return res.status(404).json({ error: 'Order not found.' });
+  }
+
+  const grossTotal = Number(order.subtotal.toFixed(2));
+  const rawDiscount = discount !== undefined ? Number(discount) : Number(order.discount || 0);
+  const cleanDiscount = Number(Math.min(grossTotal, Math.max(0, isNaN(rawDiscount) ? 0 : rawDiscount)).toFixed(2));
+  const cleanDiscountReason = typeof discountReason === 'string' ? discountReason.trim() : (order.discountReason || '');
+  const newTotalAmount = Number(Math.max(0, grossTotal - cleanDiscount).toFixed(2));
+
+  let sanitizedPayments: PaymentEntry[] = [];
+  if (Array.isArray(payments)) {
+    sanitizedPayments = payments
+      .map((p: any, idx: number) => ({
+        id: p.id || `pay-${Date.now()}-${idx}`,
+        method: p.method || 'Cash',
+        amount: Number(Math.max(0, Number(p.amount) || 0).toFixed(2)),
+        reference: typeof p.reference === 'string' && p.reference.trim() ? p.reference.trim() : undefined,
+        recordedAt: p.recordedAt || nowIso,
+        recordedBy: p.recordedBy || approvedBy,
+      }))
+      .filter((p: PaymentEntry) => p.amount > 0);
+  } else {
+    // Legacy single-method full payment fallback
+    const fallbackMethod = (paymentMethod || 'Cash') as PaymentEntry['method'];
+    if (newTotalAmount > 0) {
+      sanitizedPayments = [{
+        id: `pay-${Date.now()}-0`,
+        method: fallbackMethod,
+        amount: newTotalAmount,
+        recordedAt: nowIso,
+        recordedBy: approvedBy,
+      }];
+    }
+  }
+
+  const amountPaid = Number(sanitizedPayments.reduce((sum, p) => sum + p.amount, 0).toFixed(2));
+  const balanceDue = Number(Math.max(0, newTotalAmount - amountPaid).toFixed(2));
+  const paymentStatus: 'paid' | 'partial' | 'unpaid' =
+    newTotalAmount === 0 || amountPaid >= newTotalAmount
+      ? 'paid'
+      : amountPaid > 0
+      ? 'partial'
+      : 'unpaid';
+
+  const uniqueMethods = Array.from(new Set(sanitizedPayments.map(p => p.method)));
+  let approvedMethodLabel = paymentMethod || 'Cash';
+  if (Array.isArray(payments)) {
+    if (uniqueMethods.length === 0) {
+      approvedMethodLabel = newTotalAmount === 0 ? 'Waived (100% Discount)' : 'Unpaid (Balance Due)';
+    } else if (uniqueMethods.length === 1) {
+      approvedMethodLabel = uniqueMethods[0];
+    } else {
+      approvedMethodLabel = `Split (${uniqueMethods.join(' + ')})`;
+    }
+  }
+
+  const nextStatus = order.status === 'dispensed' ? 'dispensed' : 'payment_approved';
+
+  if (isConnectedToNeon) {
+    const updateSql = `UPDATE dispensation_orders 
+       SET status = $1, 
+           payment_approved_by = $2, 
+           payment_approved_at = NOW(), 
+           payment_method = $3,
+           tax = 0,
+           discount = $4,
+           discount_reason = $5,
+           total_amount = $6,
+           payments = $7,
+           amount_paid = $8,
+           balance_due = $9,
+           payment_status = $10
+       WHERE id = $11 AND tenant_id = $12`;
+    const updateParams = [
+      nextStatus,
+      approvedBy,
+      approvedMethodLabel,
+      cleanDiscount,
+      cleanDiscountReason || null,
+      newTotalAmount,
+      JSON.stringify(sanitizedPayments),
+      amountPaid,
+      balanceDue,
+      paymentStatus,
+      id,
+      tenantId,
+    ];
+    try {
+      await query(updateSql, updateParams);
+    } catch (e: any) {
+      console.warn('[DB Error] approve payment Neon:', e?.message || e);
+      try {
+        await ensureDispensationColumns(true);
+        await query(updateSql, updateParams);
+      } catch (retryErr: any) {
+        console.warn('[DB Error] retry approve payment Neon failed:', retryErr?.message || retryErr);
+        // Legacy column fallback so order status still transitions to payment_approved
+        try {
+          await query(
+            `UPDATE dispensation_orders 
+             SET status = $1, payment_approved_by = $2, payment_approved_at = NOW(), payment_method = $3, tax = 0, discount = $4, total_amount = $5
+             WHERE id = $6 AND tenant_id = $7`,
+            [nextStatus, approvedBy, approvedMethodLabel.slice(0, 50), cleanDiscount, newTotalAmount, id, tenantId]
+          );
+        } catch (fallbackErr: any) {
+          console.warn('[DB Error] fallback approve payment Neon failed:', fallbackErr?.message || fallbackErr);
+        }
+      }
+    }
+  }
+
+  // Update returned order object and in-memory cache
+  order.status = nextStatus;
+  order.paymentApprovedBy = approvedBy;
+  order.paymentApprovedAt = nowIso;
+  order.paymentMethod = approvedMethodLabel;
+  order.tax = 0;
+  order.discount = cleanDiscount;
+  order.discountReason = cleanDiscountReason || undefined;
+  order.totalAmount = newTotalAmount;
+  order.payments = sanitizedPayments;
+  order.amountPaid = amountPaid;
+  order.balanceDue = balanceDue;
+  order.paymentStatus = paymentStatus;
+
+  if (memOrder && memOrder !== order) {
+    Object.assign(memOrder, order);
   }
 
   res.json({
-    message: `Payment approved for order #${order?.orderNumber || id}. Order is now ready for dispensation finalization.`,
+    message:
+      paymentStatus === 'paid'
+        ? `Payment finalized for order #${order.orderNumber}. Order is ready for dispensation.`
+        : `Incomplete payment recorded for order #${order.orderNumber} (Balance Due: ₦${balanceDue.toLocaleString()}). Order authorized for dispensation.`,
     order,
   });
 });
@@ -1893,6 +2128,16 @@ app.post('/api/dispensations/orders/:id/finalize', authenticateToken, verifyTena
       const rows = await query<any>('SELECT * FROM dispensation_orders WHERE id = $1 AND tenant_id = $2', [id, tenantId]);
       if (rows.length > 0) {
         const r = rows[0];
+        const parsedPayments: PaymentEntry[] = r.payments
+          ? (typeof r.payments === 'string' ? JSON.parse(r.payments) : r.payments)
+          : [];
+        const totalAmt = Number(r.total_amount);
+        const amtPaid = r.amount_paid !== null && r.amount_paid !== undefined
+          ? Number(r.amount_paid)
+          : totalAmt;
+        const balDue = r.balance_due !== null && r.balance_due !== undefined
+          ? Number(r.balance_due)
+          : Number(Math.max(0, totalAmt - amtPaid).toFixed(2));
         order = {
           id: r.id,
           tenantId: r.tenant_id,
@@ -1906,9 +2151,14 @@ app.post('/api/dispensations/orders/:id/finalize', authenticateToken, verifyTena
           subtotal: Number(r.subtotal),
           tax: Number(r.tax),
           discount: Number(r.discount),
-          totalAmount: Number(r.total_amount),
+          discountReason: r.discount_reason || undefined,
+          totalAmount: totalAmt,
           status: r.status,
           paymentMethod: r.payment_method,
+          payments: Array.isArray(parsedPayments) ? parsedPayments : [],
+          amountPaid: amtPaid,
+          balanceDue: balDue,
+          paymentStatus: r.payment_status || (balDue > 0 ? (amtPaid > 0 ? 'partial' : 'unpaid') : 'paid'),
           createdBy: r.created_by,
           createdByRole: r.created_by_role,
           paymentApprovedBy: r.payment_approved_by,
@@ -1988,6 +2238,13 @@ app.post('/api/dispensations/orders/:id/finalize', authenticateToken, verifyTena
   // Create permanent Dispensation Record for audit trail
   const receiptNumber = `RCP-${Date.now().toString().slice(-7)}`;
   const recordId = `rec-${Date.now()}`;
+  const recordAmountPaid = order.amountPaid !== undefined ? order.amountPaid : order.totalAmount;
+  const recordBalanceDue = order.balanceDue !== undefined
+    ? order.balanceDue
+    : Number(Math.max(0, order.totalAmount - recordAmountPaid).toFixed(2));
+  const recordPaymentStatus: 'paid' | 'partial' | 'unpaid' =
+    order.paymentStatus || (recordBalanceDue > 0 ? (recordAmountPaid > 0 ? 'partial' : 'unpaid') : 'paid');
+
   const record: DispensationRecord = {
     id: recordId,
     tenantId,
@@ -2001,8 +2258,13 @@ app.post('/api/dispensations/orders/:id/finalize', authenticateToken, verifyTena
     subtotal: order.subtotal,
     tax: order.tax,
     discount: order.discount,
+    discountReason: order.discountReason,
     totalAmount: order.totalAmount,
     paymentMethod: order.paymentMethod || 'Cash',
+    payments: order.payments || [],
+    amountPaid: recordAmountPaid,
+    balanceDue: recordBalanceDue,
+    paymentStatus: recordPaymentStatus,
     dispensedBy: finalizedBy,
     dispensedByRole: finalizedByRole,
     dispensedAt: new Date().toISOString(),
@@ -2011,74 +2273,80 @@ app.post('/api/dispensations/orders/:id/finalize', authenticateToken, verifyTena
   };
 
   if (isConnectedToNeon) {
+    await ensureDispensationColumns(false);
+    const insertRecSql = `INSERT INTO dispensation_records (
+      id, tenant_id, order_id, receipt_number, patient_name, patient_age, 
+      patient_contact, prescribing_doctor, prescription_number, 
+      items, subtotal, tax, discount, discount_reason, total_amount, payment_method, 
+      payments, amount_paid, balance_due, payment_status,
+      dispensed_by, dispensed_by_role, payment_approved_by, status, dispensed_at
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, 'completed', NOW())`;
+    const insertRecParams = [
+      recordId,
+      tenantId,
+      order.id,
+      receiptNumber,
+      record.patientName,
+      record.patientAge || null,
+      record.patientContact || null,
+      record.prescribingDoctor || null,
+      record.prescriptionNumber || null,
+      JSON.stringify(record.items || []),
+      Number(record.subtotal) || 0,
+      Number(record.tax) || 0,
+      Number(record.discount) || 0,
+      record.discountReason || null,
+      Number(record.totalAmount) || 0,
+      record.paymentMethod || 'Cash',
+      JSON.stringify(record.payments || []),
+      Number(record.amountPaid ?? record.totalAmount) || 0,
+      Number(record.balanceDue ?? 0) || 0,
+      record.paymentStatus || 'paid',
+      record.dispensedBy || 'Dispenser',
+      record.dispensedByRole || 'pharmacist',
+      record.paymentApprovedBy || null
+    ];
     try {
-      await query(
-        `INSERT INTO dispensation_records (
-          id, tenant_id, receipt_number, patient_name, patient_age, 
-          patient_contact, prescribing_doctor, prescription_number, 
-          items, subtotal, tax, discount, total_amount, payment_method, 
-          dispensed_by, dispensed_by_role, payment_approved_by, status, dispensed_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, 'completed', NOW())`,
-        [
-          recordId,
-          tenantId,
-          receiptNumber,
-          record.patientName,
-          record.patientAge || null,
-          record.patientContact || null,
-          record.prescribingDoctor || null,
-          record.prescriptionNumber || null,
-          JSON.stringify(record.items),
-          record.subtotal,
-          record.tax,
-          record.discount,
-          record.totalAmount,
-          record.paymentMethod,
-          record.dispensedBy,
-          record.dispensedByRole,
-          record.paymentApprovedBy || null
-        ]
-      );
-    } catch (e) {
-      console.warn('[DB Error] insert dispensation record Neon:', e);
+      await query(insertRecSql, insertRecParams);
+    } catch (e: any) {
+      console.warn('[DB Error] insert dispensation record Neon:', e?.message || e);
       try {
-        await query(`
-          ALTER TABLE dispensation_records ADD COLUMN IF NOT EXISTS dispensed_by VARCHAR(255);
-          ALTER TABLE dispensation_records ADD COLUMN IF NOT EXISTS dispensed_by_role VARCHAR(50);
-          ALTER TABLE dispensation_records ADD COLUMN IF NOT EXISTS payment_approved_by VARCHAR(255);
-          ALTER TABLE dispensation_records ADD COLUMN IF NOT EXISTS payment_method VARCHAR(50);
-          ALTER TABLE dispensation_records ADD COLUMN IF NOT EXISTS void_reason TEXT;
-          ALTER TABLE dispensation_records ADD COLUMN IF NOT EXISTS voided_at TIMESTAMP WITH TIME ZONE;
-        `);
-        await query(
-          `INSERT INTO dispensation_records (
-            id, tenant_id, receipt_number, patient_name, patient_age, 
-            patient_contact, prescribing_doctor, prescription_number, 
-            items, subtotal, tax, discount, total_amount, payment_method, 
-            dispensed_by, dispensed_by_role, payment_approved_by, status, dispensed_at
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, 'completed', NOW())`,
-          [
-            recordId,
-            tenantId,
-            receiptNumber,
-            record.patientName,
-            record.patientAge || null,
-            record.patientContact || null,
-            record.prescribingDoctor || null,
-            record.prescriptionNumber || null,
-            JSON.stringify(record.items),
-            record.subtotal,
-            record.tax,
-            record.discount,
-            record.totalAmount,
-            record.paymentMethod,
-            record.dispensedBy,
-            record.dispensedByRole,
-            record.paymentApprovedBy || null
-          ]
-        );
-      } catch (retryErr) {
-        console.warn('[DB Error] retry insert dispensation record failed:', retryErr);
+        await ensureDispensationColumns(true);
+        await query(insertRecSql, insertRecParams);
+      } catch (retryErr: any) {
+        console.warn('[DB Error] retry insert dispensation record failed:', retryErr?.message || retryErr);
+        // Legacy minimal-columns fallback so the audit record is never lost
+        try {
+          await query(
+            `INSERT INTO dispensation_records (
+              id, tenant_id, receipt_number, patient_name, patient_age, 
+              patient_contact, prescribing_doctor, prescription_number, 
+              items, subtotal, tax, discount, total_amount, payment_method, 
+              dispensed_by, dispensed_by_role, payment_approved_by, status, dispensed_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, 'completed', NOW())`,
+            [
+              recordId,
+              tenantId,
+              receiptNumber,
+              record.patientName,
+              record.patientAge || null,
+              record.patientContact || null,
+              record.prescribingDoctor || null,
+              record.prescriptionNumber || null,
+              JSON.stringify(record.items || []),
+              Number(record.subtotal) || 0,
+              Number(record.tax) || 0,
+              Number(record.discount) || 0,
+              Number(record.totalAmount) || 0,
+              (record.paymentMethod || 'Cash').slice(0, 50),
+              record.dispensedBy || 'Dispenser',
+              record.dispensedByRole || 'pharmacist',
+              record.paymentApprovedBy || null
+            ]
+          );
+        } catch (legacyErr: any) {
+          console.error('[DB Error] legacy fallback insert dispensation record failed:', legacyErr?.message || legacyErr);
+        }
       }
     }
   }
@@ -2094,6 +2362,9 @@ app.post('/api/dispensations/orders/:id/finalize', authenticateToken, verifyTena
 });
 
 app.get('/api/dispensations/history', authenticateToken, verifyTenantActive, async (req: AuthenticatedRequest, res: Response) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
   const tenantId = req.user?.tenantId || 'tenant-default';
 
   if (isConnectedToNeon) {
@@ -2102,32 +2373,157 @@ app.get('/api/dispensations/history', authenticateToken, verifyTenantActive, asy
         'SELECT * FROM dispensation_records WHERE tenant_id = $1 ORDER BY dispensed_at DESC',
         [tenantId]
       );
-      const mapped: DispensationRecord[] = rows.map(r => ({
-        id: r.id,
-        tenantId: r.tenant_id,
-        receiptNumber: r.receipt_number,
-        patientName: r.patient_name,
-        patientAge: r.patient_age ? Number(r.patient_age) : undefined,
-        patientContact: r.patient_contact,
-        prescribingDoctor: r.prescribing_doctor,
-        prescriptionNumber: r.prescription_number,
-        items: typeof r.items === 'string' ? JSON.parse(r.items) : r.items,
-        subtotal: Number(r.subtotal),
-        tax: Number(r.tax),
-        discount: Number(r.discount),
-        totalAmount: Number(r.total_amount),
-        paymentMethod: r.payment_method,
-        dispensedBy: r.dispensed_by,
-        dispensedByRole: r.dispensed_by_role,
-        dispensedAt: r.dispensed_at ? new Date(r.dispensed_at).toISOString() : new Date().toISOString(),
-        paymentApprovedBy: r.payment_approved_by,
-        status: r.status,
-        voidReason: r.void_reason,
-        voidedAt: r.voided_at ? new Date(r.voided_at).toISOString() : undefined,
-      }));
+      const mapped: DispensationRecord[] = rows.map(r => {
+        const parsedPayments = safeJsonParse<PaymentEntry[]>(r.payments, []);
+        const parsedItems = safeJsonParse<any[]>(r.items, []);
+        const totalAmt = Number(r.total_amount) || 0;
+        const amtPaid = r.amount_paid !== null && r.amount_paid !== undefined
+          ? Number(r.amount_paid)
+          : totalAmt;
+        const balDue = r.balance_due !== null && r.balance_due !== undefined
+          ? Number(r.balance_due)
+          : Number(Math.max(0, totalAmt - amtPaid).toFixed(2));
+        return {
+          id: r.id,
+          tenantId: r.tenant_id,
+          receiptNumber: r.receipt_number,
+          patientName: r.patient_name,
+          patientAge: r.patient_age ? Number(r.patient_age) : undefined,
+          patientContact: r.patient_contact,
+          prescribingDoctor: r.prescribing_doctor,
+          prescriptionNumber: r.prescription_number,
+          items: Array.isArray(parsedItems) ? parsedItems : [],
+          subtotal: Number(r.subtotal) || 0,
+          tax: Number(r.tax) || 0,
+          discount: Number(r.discount) || 0,
+          discountReason: r.discount_reason || undefined,
+          totalAmount: totalAmt,
+          paymentMethod: r.payment_method || 'Cash',
+          payments: Array.isArray(parsedPayments) ? parsedPayments : [],
+          amountPaid: amtPaid,
+          balanceDue: balDue,
+          paymentStatus: r.payment_status || (balDue > 0 ? (amtPaid > 0 ? 'partial' : 'unpaid') : 'paid'),
+          dispensedBy: r.dispensed_by || 'Dispenser',
+          dispensedByRole: r.dispensed_by_role || 'pharmacist',
+          dispensedAt: r.dispensed_at ? new Date(r.dispensed_at).toISOString() : new Date().toISOString(),
+          paymentApprovedBy: r.payment_approved_by,
+          status: r.status || 'completed',
+          voidReason: r.void_reason,
+          voidedAt: r.voided_at ? new Date(r.voided_at).toISOString() : undefined,
+        };
+      });
+
+      // Self-healing check: recover any finalized ('dispensed') orders whose dispensation_records insert may have been missed
+      try {
+        const existingOrderIds = new Set<string>(rows.map(r => r.order_id).filter(Boolean));
+        const dispensedOrderRows = await query<any>(
+          `SELECT * FROM dispensation_orders WHERE tenant_id = $1 AND status = 'dispensed' ORDER BY finalized_at DESC NULLS LAST, created_at DESC`,
+          [tenantId]
+        );
+
+        for (const o of dispensedOrderRows) {
+          if (existingOrderIds.has(o.id)) continue;
+
+          const oTime = new Date(o.finalized_at || o.created_at || Date.now()).getTime();
+          const oTotal = Number(o.total_amount) || 0;
+          const alreadyExists = mapped.some(rec => {
+            const recTime = new Date(rec.dispensedAt).getTime();
+            const samePatient = (rec.patientName || '').trim().toLowerCase() === (o.patient_name || '').trim().toLowerCase();
+            const sameTotal = Math.abs(rec.totalAmount - oTotal) < 0.01;
+            const closeTime = Math.abs(recTime - oTime) <= 180000; // within 3 mins
+            return samePatient && sameTotal && closeTime;
+          });
+
+          if (!alreadyExists) {
+            const oPayments = safeJsonParse<PaymentEntry[]>(o.payments, []);
+            const oItems = safeJsonParse<any[]>(o.items, []);
+            const oPaid = o.amount_paid !== null && o.amount_paid !== undefined ? Number(o.amount_paid) : oTotal;
+            const oBal = o.balance_due !== null && o.balance_due !== undefined ? Number(o.balance_due) : Number(Math.max(0, oTotal - oPaid).toFixed(2));
+            const recoveredRec: DispensationRecord = {
+              id: `rec-ord-${o.id}`,
+              tenantId: o.tenant_id,
+              receiptNumber: `RCP-${String(o.order_number || o.id).replace(/^ORD-/, '')}`,
+              patientName: o.patient_name,
+              patientAge: o.patient_age ? Number(o.patient_age) : undefined,
+              patientContact: o.patient_contact,
+              prescribingDoctor: o.prescribing_doctor,
+              prescriptionNumber: o.prescription_number,
+              items: Array.isArray(oItems) ? oItems : [],
+              subtotal: Number(o.subtotal) || 0,
+              tax: Number(o.tax) || 0,
+              discount: Number(o.discount) || 0,
+              discountReason: o.discount_reason || undefined,
+              totalAmount: oTotal,
+              paymentMethod: o.payment_method || 'Cash',
+              payments: Array.isArray(oPayments) ? oPayments : [],
+              amountPaid: oPaid,
+              balanceDue: oBal,
+              paymentStatus: o.payment_status || (oBal > 0 ? (oPaid > 0 ? 'partial' : 'unpaid') : 'paid'),
+              dispensedBy: o.finalized_by || o.created_by || 'Dispenser',
+              dispensedByRole: o.created_by_role || 'pharmacist',
+              dispensedAt: o.finalized_at ? new Date(o.finalized_at).toISOString() : (o.created_at ? new Date(o.created_at).toISOString() : new Date().toISOString()),
+              paymentApprovedBy: o.payment_approved_by || 'Cashier Desk',
+              status: 'completed',
+            };
+            mapped.push(recoveredRec);
+
+            // Backfill into dispensation_records asynchronously so future reads come directly from the table
+            ensureDispensationColumns(false).then(() =>
+              query(
+                `INSERT INTO dispensation_records (
+                  id, tenant_id, order_id, receipt_number, patient_name, patient_age,
+                  patient_contact, prescribing_doctor, prescription_number,
+                  items, subtotal, tax, discount, discount_reason, total_amount, payment_method,
+                  payments, amount_paid, balance_due, payment_status,
+                  dispensed_by, dispensed_by_role, payment_approved_by, status, dispensed_at
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, 'completed', $24)
+                ON CONFLICT (id) DO NOTHING`,
+                [
+                  recoveredRec.id,
+                  recoveredRec.tenantId,
+                  o.id,
+                  recoveredRec.receiptNumber,
+                  recoveredRec.patientName,
+                  recoveredRec.patientAge || null,
+                  recoveredRec.patientContact || null,
+                  recoveredRec.prescribingDoctor || null,
+                  recoveredRec.prescriptionNumber || null,
+                  JSON.stringify(recoveredRec.items),
+                  recoveredRec.subtotal,
+                  recoveredRec.tax,
+                  recoveredRec.discount,
+                  recoveredRec.discountReason || null,
+                  recoveredRec.totalAmount,
+                  recoveredRec.paymentMethod,
+                  JSON.stringify(recoveredRec.payments || []),
+                  recoveredRec.amountPaid ?? recoveredRec.totalAmount,
+                  recoveredRec.balanceDue ?? 0,
+                  recoveredRec.paymentStatus || 'paid',
+                  recoveredRec.dispensedBy,
+                  recoveredRec.dispensedByRole,
+                  recoveredRec.paymentApprovedBy || null,
+                  recoveredRec.dispensedAt,
+                ]
+              )
+            ).catch((bfErr: any) => console.warn('[DB Backfill Notice]', bfErr?.message || bfErr));
+          }
+        }
+      } catch (recErr: any) {
+        console.warn('[DB Notice] dispensed order recovery check:', recErr?.message || recErr);
+      }
+
+      // Also merge any in-memory records created in this process not yet present in DB rows
+      const memRecs = memDispensations[tenantId] || [];
+      for (const mRec of memRecs) {
+        if (!mapped.some(r => r.id === mRec.id || r.receiptNumber === mRec.receiptNumber)) {
+          mapped.push(mRec);
+        }
+      }
+
+      mapped.sort((a, b) => new Date(b.dispensedAt).getTime() - new Date(a.dispensedAt).getTime());
       return res.json({ dispensations: mapped });
-    } catch (e) {
-      console.warn('[DB Error] get dispensations history Neon:', e);
+    } catch (e: any) {
+      console.warn('[DB Error] get dispensations history Neon:', e?.message || e);
     }
   }
 

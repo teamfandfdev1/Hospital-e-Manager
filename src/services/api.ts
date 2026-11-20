@@ -9,7 +9,8 @@ import {
   StockAlert, 
   AnalyticsSummary,
   UserRole,
-  StaffAccount 
+  StaffAccount,
+  ApprovePaymentPayload
 } from '../types';
 
 const CLIENT_TOKEN_KEY = 'pharmpulse_jwt_token';
@@ -264,7 +265,10 @@ export const api = {
 
   async getRegistrationHistory(): Promise<DrugRegistrationLog[]> {
     try {
-      const res = await fetch('/api/audit/registration-logs', { headers: this.getAuthHeaders() });
+      const res = await fetch('/api/audit/registration-logs?t=' + Date.now(), {
+        headers: this.getAuthHeaders(),
+        cache: 'no-store'
+      });
       if (res.ok) {
         const data = await res.json();
         return data.logs || [];
@@ -350,15 +354,18 @@ export const api = {
     return data.order;
   },
 
-  async approveOrderPayment(orderId: string, paymentMethod: string): Promise<DispensationOrder> {
+  async approveOrderPayment(orderId: string, payload: ApprovePaymentPayload | string): Promise<DispensationOrder> {
+    const body = typeof payload === 'string'
+      ? { paymentMethod: payload }
+      : payload;
     const res = await fetch(`/api/dispensations/orders/${orderId}/approve-payment`, {
       method: 'POST',
       headers: this.getAuthHeaders(),
-      body: JSON.stringify({ paymentMethod })
+      body: JSON.stringify(body)
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      throw new Error(err.error || 'Failed to approve payment');
+      throw new Error(err.error || 'Failed to finalize payment');
     }
     const data = await res.json();
     return data.order;
@@ -392,7 +399,10 @@ export const api = {
 
   async getDispensationHistory(): Promise<DispensationRecord[]> {
     try {
-      const res = await fetch('/api/dispensations/history', { headers: this.getAuthHeaders() });
+      const res = await fetch('/api/dispensations/history?t=' + Date.now(), {
+        headers: this.getAuthHeaders(),
+        cache: 'no-store'
+      });
       if (res.ok) {
         const data = await res.json();
         return data.dispensations || [];

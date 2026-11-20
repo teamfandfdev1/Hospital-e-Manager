@@ -36,7 +36,8 @@ import {
   DispensationOrder,
   TenantHospital, 
   SupportTicket, 
-  UserRole 
+  UserRole,
+  ApprovePaymentPayload
 } from './types';
 
 // Detect whether current session is accessing the isolated developer ops portal
@@ -294,10 +295,10 @@ export default function App() {
     }
   }, []);
 
-  // Automatic real-time refresh interval (every 3 seconds) for Dispensation & Payments modules
+  // Automatic real-time refresh interval (every 3 seconds) for Dashboard, Dispensation & Payments modules
   useEffect(() => {
     if (activeDomain !== 'pharmacy' || isAccountDisabled) return;
-    if (currentTab !== 'dispensation' && currentTab !== 'payments') return;
+    if (currentTab !== 'dashboard' && currentTab !== 'dispensation' && currentTab !== 'payments') return;
 
     // Immediately trigger silent refresh upon entering either tab
     refreshRealtimeData(true);
@@ -319,6 +320,26 @@ export default function App() {
       document.removeEventListener('visibilitychange', handleVisibility);
     };
   }, [activeDomain, isAccountDisabled, currentTab, refreshRealtimeData]);
+
+  // Refresh Audit Trails immediately whenever the user enters the Audit Trails tab
+  const refreshAuditData = useCallback(async () => {
+    try {
+      const [fetchedDispensations, fetchedLogs] = await Promise.all([
+        api.getDispensationHistory().catch(() => null),
+        api.getRegistrationHistory().catch(() => null),
+      ]);
+      if (fetchedDispensations) setDispensations(fetchedDispensations);
+      if (fetchedLogs) setRegistrationLogs(fetchedLogs);
+    } catch (err) {
+      console.warn('Audit trails refresh error:', err);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeDomain !== 'pharmacy' || isAccountDisabled) return;
+    if (currentTab !== 'audit') return;
+    refreshAuditData();
+  }, [activeDomain, isAccountDisabled, currentTab, refreshAuditData]);
 
   // Handle Domain Switching (Internal / Developer routing)
   const handleDomainChange = (domain: 'pharmacy' | 'technician') => {
@@ -349,6 +370,58 @@ export default function App() {
     }
   };
 
+  // Permission helper for pharmacy modules
+  const canAccessTab = useCallback((tab: string): boolean => {
+    if (activeDomain !== 'pharmacy') return true;
+    if (!user) return false;
+    if (tab === 'dashboard') return true;
+    if (user.role === 'admin') return true;
+    if (user.role === 'technician') return tab !== 'access';
+
+    const perms = user.permissions || {
+      dispensation: true,
+      payments: true,
+      inventory: true,
+      registration: true,
+      alerts: true,
+      audit: true,
+    };
+
+    switch (tab) {
+      case 'dispensation':
+        return Boolean(perms.dispensation);
+      case 'payments':
+        return Boolean(perms.payments);
+      case 'inventory':
+        return Boolean(perms.inventory);
+      case 'registration':
+        return Boolean(perms.registration);
+      case 'alerts':
+        return Boolean(perms.alerts);
+      case 'audit':
+        return Boolean(perms.audit);
+      case 'access':
+        return false;
+      default:
+        return true;
+    }
+  }, [activeDomain, user]);
+
+  const navigateToTab = useCallback((tab: string) => {
+    if (!canAccessTab(tab)) {
+      showToast('Access denied: You do not have permission to access that module.', 'warning');
+      return;
+    }
+    setCurrentTab(tab);
+  }, [canAccessTab, showToast]);
+
+  // Safety guard: if current tab becomes unauthorized (e.g. role/permission change), return to dashboard
+  useEffect(() => {
+    if (activeDomain === 'pharmacy' && user && currentTab !== 'dashboard' && !canAccessTab(currentTab)) {
+      setCurrentTab('dashboard');
+    }
+  }, [activeDomain, user, currentTab, canAccessTab]);
+
   // Global Keyboard Shortcuts (Alt+D, Alt+R, Alt+I, Alt+A and Developer Shortcut Ctrl+Shift+D)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -369,30 +442,31 @@ export default function App() {
         return;
       }
 
-      if (e.altKey && !isInput && activeDomain === 'pharmacy') {
-        if (e.key === 'd' || e.key === 'D') {
+      if (e.altKey && !isInput && activeDomain === 'pharmacy' && user && jwtToken && !mustChangePassword && !isAccountDisabled) {
+        const key = e.key.toLowerCase();
+        const shortcutMap: Record<string, { tab: string; label: string; combo: string }> = {
+          d: { tab: 'dispensation', label: 'Dispense Medication', combo: 'Alt+D' },
+          r: { tab: 'registration', label: 'Register Medication', combo: 'Alt+R' },
+          i: { tab: 'inventory', label: 'Inventory', combo: 'Alt+I' },
+          a: { tab: 'alerts', label: 'Stock & Expiry Alerts', combo: 'Alt+A' },
+        };
+
+        const shortcut = shortcutMap[key];
+        if (shortcut) {
           e.preventDefault();
-          setCurrentTab('dispensation');
-          showToast('Navigated to Dispense Medication (Alt+D)', 'info');
-        } else if (e.key === 'r' || e.key === 'R') {
-          e.preventDefault();
-          setCurrentTab('registration');
-          showToast('Navigated to Register Medication (Alt+R)', 'info');
-        } else if (e.key === 'i' || e.key === 'I') {
-          e.preventDefault();
-          setCurrentTab('inventory');
-          showToast('Navigated to Inventory (Alt+I)', 'info');
-        } else if (e.key === 'a' || e.key === 'A') {
-          e.preventDefault();
-          setCurrentTab('alerts');
-          showToast('Navigated to Stock Alerts (Alt+A)', 'info');
+          if (!canAccessTab(shortcut.tab)) {
+            showToast(`Access denied: You do not have permission to open ${shortcut.label}.`, 'warning');
+            return;
+          }
+          setCurrentTab(shortcut.tab);
+          showToast(`Navigated to ${shortcut.label} (${shortcut.combo})`, 'info');
         }
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [showToast, activeDomain]);
+  }, [showToast, activeDomain, user, jwtToken, mustChangePassword, isAccountDisabled, canAccessTab]);
 
   // Authentication Callbacks
   const handleLoginSuccess = (token: string, authUser: User, needsPasswordChange?: boolean) => {
@@ -483,8 +557,8 @@ export default function App() {
     return order;
   };
 
-  const handleApprovePayment = async (orderId: string, paymentMethod: string) => {
-    await api.approveOrderPayment(orderId, paymentMethod);
+  const handleApprovePayment = async (orderId: string, payload: ApprovePaymentPayload) => {
+    await api.approveOrderPayment(orderId, payload);
     const updatedOrders = await api.getOrders();
     setOrders(updatedOrders);
   };
@@ -501,7 +575,18 @@ export default function App() {
     setOrders(updatedOrders);
     setDrugs(updatedDrugs);
     setAlerts(updatedAlerts);
-    setDispensations(updatedDispensations);
+
+    // Ensure the newly finalized dispensation is immediately reflected even if a fetch raced
+    const mergedDispensations = [...updatedDispensations];
+    if (
+      res.dispensation &&
+      !mergedDispensations.some(
+        (d) => d.id === res.dispensation.id || d.receiptNumber === res.dispensation.receiptNumber
+      )
+    ) {
+      mergedDispensations.unshift(res.dispensation);
+    }
+    setDispensations(mergedDispensations);
     setAnalytics(updatedAnalytics);
     showToast(`Dispensation finalized. Receipt #${res.dispensation.receiptNumber} issued.`, 'success');
     return res.dispensation;
@@ -601,7 +686,7 @@ export default function App() {
         {!isTechnicianDomain && (
           <Sidebar
             currentTab={currentTab}
-            setCurrentTab={setCurrentTab}
+            setCurrentTab={navigateToTab}
             user={user}
             onOpenAuth={() => setIsAuthOpen(true)}
             activeDomain={activeDomain}
@@ -631,7 +716,7 @@ export default function App() {
             onToggleSidebarMobile={() => setIsMobileSidebarOpen(!isMobileSidebarOpen)}
             isCollapsed={isSidebarCollapsed}
             onToggleSidebarDesktop={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
-            onNavigate={setCurrentTab}
+            onNavigate={navigateToTab}
             onOpenCustomerService={() => setIsCustomerServiceOpen(true)}
             onLogout={handleLogout}
             onRegisterNewHospital={() => {
@@ -678,26 +763,31 @@ export default function App() {
                         analytics={analytics}
                         alerts={alerts}
                         drugs={drugs}
-                        onNavigate={setCurrentTab}
+                        orders={orders}
+                        dispensations={dispensations}
+                        registrationLogs={registrationLogs}
+                        user={user}
+                        onNavigate={navigateToTab}
                         onRefresh={loadInitialData}
                       />
                     )}
 
-                    {currentTab === 'dispensation' && (
+                    {currentTab === 'dispensation' && canAccessTab('dispensation') && (
                       <DispensationPosView
                         drugs={drugs}
                         orders={orders}
+                        tenantName={user?.tenantName}
                         onCreateOrder={handleCreateOrder}
                         onFinalizeOrder={handleFinalizeOrder}
                         onShowToast={showToast}
-                        onNavigateToPayments={() => setCurrentTab('payments')}
+                        onNavigateToPayments={() => navigateToTab('payments')}
                         onRefreshOrders={() => refreshRealtimeData(false)}
                         isRefreshing={isRefreshing}
                         lastSyncTime={lastSyncTime}
                       />
                     )}
 
-                    {currentTab === 'payments' && (
+                    {currentTab === 'payments' && canAccessTab('payments') && (
                       <PaymentsView
                         orders={orders}
                         currentUser={user}
@@ -709,43 +799,45 @@ export default function App() {
                       />
                     )}
 
-                    {currentTab === 'inventory' && (
+                    {currentTab === 'inventory' && canAccessTab('inventory') && (
                       <InventoryView
                         drugs={drugs}
                         onShowToast={showToast}
-                        onNavigate={setCurrentTab}
+                        onNavigate={navigateToTab}
                       />
                     )}
 
-                    {currentTab === 'registration' && (
+                    {currentTab === 'registration' && canAccessTab('registration') && (
                       <DrugRegistrationView
                         drugs={drugs}
                         jwtToken={jwtToken}
                         onRegisterDrug={handleRegisterDrug}
                         onShowToast={showToast}
-                        onNavigate={setCurrentTab}
+                        onNavigate={navigateToTab}
                       />
                     )}
 
-                    {currentTab === 'alerts' && (
+                    {currentTab === 'alerts' && canAccessTab('alerts') && (
                       <StockAlertsView
                         alerts={alerts}
                         drugs={drugs}
                         onShowToast={showToast}
-                        onNavigate={setCurrentTab}
+                        onNavigate={navigateToTab}
                       />
                     )}
 
-                    {currentTab === 'audit' && (
+                    {currentTab === 'audit' && canAccessTab('audit') && (
                       <AuditTrailsView
                         registrationLogs={registrationLogs}
                         dispensations={dispensations}
+                        tenantName={user?.tenantName}
+                        onRefresh={refreshAuditData}
                         onVoidDispensation={handleVoidDispensation}
                         onShowToast={showToast}
                       />
                     )}
 
-                    {currentTab === 'access' && user?.role === 'admin' && (
+                    {currentTab === 'access' && canAccessTab('access') && (
                       <AccessControlView
                         currentUser={user}
                         activeDomain="pharmacy"
@@ -789,7 +881,7 @@ export default function App() {
           {/* Minimalist Footer: Prompt requirement: "In the footer, remove the site URL and the database name, they are unnecessary." */}
           <footer className="bg-white border-t border-slate-200/80 text-slate-500 text-xs py-3 px-4 sm:px-6 mt-auto flex flex-col sm:flex-row items-center justify-between gap-2">
             <div className="flex items-center gap-2">
-              <span className="font-bold text-slate-900">Hospital e-Manager by Team F&F</span>
+              <span className="font-bold text-slate-900">Hospital e-Manager</span>
             </div>
 
             <div className="flex items-center gap-3">

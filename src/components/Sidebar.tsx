@@ -303,36 +303,42 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 </>
               )}
 
-              {/* RAPID CLINICAL KEYBOARD SHORTCUTS PANEL (Prompt requirement: "let the shortcuts only be shown on the sidebar, strictly in desktop mode (the shortcuts won’t appear for tablet and mobile)") */}
-              {!isCollapsed && (
-                <div className="hidden lg:block pt-5 px-1">
-                  <div className="p-3 bg-slate-950/80 rounded-xl border border-slate-800 text-[11px] text-slate-400 space-y-2">
-                    <div className="flex items-center gap-1.5 text-teal-400 font-bold uppercase tracking-wider text-[10px] font-mono">
-                      <Sparkles className="w-3.5 h-3.5" />
-                      <span>Desktop Shortcuts</span>
-                    </div>
+              {/* RAPID CLINICAL KEYBOARD SHORTCUTS PANEL (Only displays shortcuts for modules the user has permission to access) */}
+              {!isCollapsed && (() => {
+                const visibleShortcuts = [
+                  { allowed: isAdmin || Boolean(perms.dispensation), label: 'Dispense Meds', key: 'Alt+D', tab: 'dispensation' },
+                  { allowed: isAdmin || Boolean(perms.registration), label: 'Register Drug', key: 'Alt+R', tab: 'registration' },
+                  { allowed: isAdmin || Boolean(perms.inventory), label: 'Inventory', key: 'Alt+I', tab: 'inventory' },
+                  { allowed: isAdmin || Boolean(perms.alerts), label: 'Stock Alerts', key: 'Alt+A', tab: 'alerts' },
+                ].filter(s => s.allowed);
 
-                    <div className="space-y-1.5 text-[10px] font-mono text-slate-300">
-                      <div className="flex items-center justify-between">
-                        <span className="text-slate-400">Dispense Meds</span>
-                        <kbd className="px-1.5 py-0.5 bg-slate-800 border border-slate-700 rounded text-teal-300">Alt+D</kbd>
+                if (visibleShortcuts.length === 0) return null;
+
+                return (
+                  <div className="hidden lg:block pt-5 px-1">
+                    <div className="p-3 bg-slate-950/80 rounded-xl border border-slate-800 text-[11px] text-slate-400 space-y-2">
+                      <div className="flex items-center gap-1.5 text-teal-400 font-bold uppercase tracking-wider text-[10px] font-mono">
+                        <Sparkles className="w-3.5 h-3.5" />
+                        <span>Desktop Shortcuts</span>
                       </div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-slate-400">Register Drug</span>
-                        <kbd className="px-1.5 py-0.5 bg-slate-800 border border-slate-700 rounded text-teal-300">Alt+R</kbd>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-slate-400">Inventory</span>
-                        <kbd className="px-1.5 py-0.5 bg-slate-800 border border-slate-700 rounded text-teal-300">Alt+I</kbd>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-slate-400">Stock Alerts</span>
-                        <kbd className="px-1.5 py-0.5 bg-slate-800 border border-slate-700 rounded text-teal-300">Alt+A</kbd>
+
+                      <div className="space-y-1.5 text-[10px] font-mono text-slate-300">
+                        {visibleShortcuts.map(shortcut => (
+                          <button
+                            key={shortcut.tab}
+                            type="button"
+                            onClick={() => handleNavClick(shortcut.tab)}
+                            className="w-full flex items-center justify-between hover:text-white transition-colors cursor-pointer"
+                          >
+                            <span className="text-slate-400">{shortcut.label}</span>
+                            <kbd className="px-1.5 py-0.5 bg-slate-800 border border-slate-700 rounded text-teal-300">{shortcut.key}</kbd>
+                          </button>
+                        ))}
                       </div>
                     </div>
                   </div>
-                </div>
-              )}
+                );
+              })()}
             </div>
           ) : (
             /* SERVER-SIDE MANAGER ONLY (When rendered) */

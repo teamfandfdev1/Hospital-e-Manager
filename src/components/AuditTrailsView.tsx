@@ -16,7 +16,8 @@ import {
   Eye,
   X,
   Filter,
-  Check
+  Check,
+  RefreshCw
 } from 'lucide-react';
 import { DrugRegistrationLog, DispensationRecord } from '../types';
 import { formatNaira } from '../utils/currency';
@@ -24,6 +25,8 @@ import { formatNaira } from '../utils/currency';
 interface AuditTrailsViewProps {
   registrationLogs: DrugRegistrationLog[];
   dispensations: DispensationRecord[];
+  tenantName?: string;
+  onRefresh?: () => void;
   onVoidDispensation: (id: string, reason: string) => Promise<any>;
   onShowToast: (msg: string, type?: 'success' | 'error' | 'warning') => void;
 }
@@ -31,6 +34,8 @@ interface AuditTrailsViewProps {
 export const AuditTrailsView: React.FC<AuditTrailsViewProps> = ({
   registrationLogs,
   dispensations,
+  tenantName,
+  onRefresh,
   onVoidDispensation,
   onShowToast,
 }) => {
@@ -57,8 +62,8 @@ export const AuditTrailsView: React.FC<AuditTrailsViewProps> = ({
   const uniqueDrugs = useMemo(() => {
     const set = new Set<string>();
     dispensations.forEach(d => {
-      d.items.forEach(it => {
-        if (it.brandName) set.add(it.brandName);
+      (d.items || []).forEach(it => {
+        if (it?.brandName) set.add(it.brandName);
       });
     });
     return Array.from(set).sort();
@@ -95,7 +100,7 @@ export const AuditTrailsView: React.FC<AuditTrailsViewProps> = ({
 
       // Particular Drug Filter
       if (filterDrug !== 'ALL') {
-        const hasDrug = d.items.some(it => it.brandName.toLowerCase() === filterDrug.toLowerCase());
+        const hasDrug = (d.items || []).some(it => (it?.brandName || '').toLowerCase() === filterDrug.toLowerCase());
         if (!hasDrug) return false;
       }
 
@@ -113,12 +118,12 @@ export const AuditTrailsView: React.FC<AuditTrailsViewProps> = ({
       // Text Search
       if (search.trim()) {
         const q = search.toLowerCase();
-        const matchReceipt = d.receiptNumber.toLowerCase().includes(q);
-        const matchPatient = d.patientName.toLowerCase().includes(q);
+        const matchReceipt = (d.receiptNumber || '').toLowerCase().includes(q);
+        const matchPatient = (d.patientName || '').toLowerCase().includes(q);
         const matchDoctor = d.prescribingDoctor?.toLowerCase().includes(q);
-        const matchDispenser = d.dispensedBy.toLowerCase().includes(q);
+        const matchDispenser = (d.dispensedBy || '').toLowerCase().includes(q);
         const matchApprover = (d.paymentApprovedBy || '').toLowerCase().includes(q);
-        const matchDrug = d.items.some(it => it.brandName.toLowerCase().includes(q) || it.batchNumber.toLowerCase().includes(q));
+        const matchDrug = (d.items || []).some(it => (it?.brandName || '').toLowerCase().includes(q) || (it?.batchNumber || '').toLowerCase().includes(q));
 
         if (!matchReceipt && !matchPatient && !matchDoctor && !matchDispenser && !matchApprover && !matchDrug) {
           return false;
@@ -174,21 +179,48 @@ export const AuditTrailsView: React.FC<AuditTrailsViewProps> = ({
     }
   };
 
+  const handleReprintReceipt = (rec: DispensationRecord) => {
+    setViewReceipt(rec);
+    const cleanup = () => {
+      document.body.classList.remove('printing-receipt');
+      window.removeEventListener('afterprint', cleanup);
+    };
+    window.addEventListener('afterprint', cleanup);
+    document.body.classList.add('printing-receipt');
+
+    // Allow React to mount the receipt modal before invoking browser print dialog
+    setTimeout(() => {
+      window.print();
+      onShowToast(`Receipt #${rec.receiptNumber} queued for reprint.`, 'success');
+      // Fallback cleanup in case afterprint does not fire in embedded contexts
+      setTimeout(cleanup, 1500);
+    }, 100);
+  };
+
   const handleExportCSV = () => {
     if (activeModule === 'dispensation') {
-      const headers = ['Receipt #', 'Date', 'Patient Name', 'Prescriber', 'Items Count', 'Total (₦)', 'Payment', 'Dispensed By', 'Approved By', 'Status'];
-      const rows = filteredDispensations.map(d => [
-        `"${d.receiptNumber}"`,
-        `"${d.dispensedAt}"`,
-        `"${d.patientName}"`,
-        `"${d.prescribingDoctor}"`,
-        d.items.length,
-        d.totalAmount,
-        `"${d.paymentMethod}"`,
-        `"${d.dispensedBy}"`,
-        `"${d.paymentApprovedBy || 'Cashier Desk'}"`,
-        `"${d.status}"`
-      ]);
+      const headers = ['Receipt #', 'Date', 'Patient Name', 'Prescriber', 'Items Count', 'Discount (₦)', 'Net Total (₦)', 'Amount Paid (₦)', 'Balance Due (₦)', 'Payment Method', 'Payment Status', 'Dispensed By', 'Approved By', 'Status'];
+      const rows = filteredDispensations.map(d => {
+        const amtPaid = d.amountPaid !== undefined ? d.amountPaid : d.totalAmount;
+        const balDue = d.balanceDue !== undefined ? d.balanceDue : Math.max(0, d.totalAmount - amtPaid);
+        const payStatus = d.paymentStatus || (balDue > 0 ? (amtPaid > 0 ? 'partial' : 'unpaid') : 'paid');
+        return [
+          `"${d.receiptNumber}"`,
+          `"${d.dispensedAt}"`,
+          `"${d.patientName}"`,
+          `"${d.prescribingDoctor || ''}"`,
+          d.items.length,
+          d.discount || 0,
+          d.totalAmount,
+          amtPaid,
+          balDue,
+          `"${d.paymentMethod}"`,
+          `"${payStatus}"`,
+          `"${d.dispensedBy}"`,
+          `"${d.paymentApprovedBy || 'Cashier Desk'}"`,
+          `"${d.status}"`
+        ];
+      });
       const csv = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map(e => e.join(','))].join('\n');
       const link = document.createElement('a');
       link.href = encodeURI(csv);
@@ -236,7 +268,19 @@ export const AuditTrailsView: React.FC<AuditTrailsViewProps> = ({
         </div>
 
         <div className="flex items-center gap-2.5">
+          {onRefresh && (
+            <button
+              type="button"
+              onClick={onRefresh}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 rounded-lg transition-colors cursor-pointer"
+              title="Refresh audit logs"
+            >
+              <RefreshCw className="w-3.5 h-3.5 text-slate-500" />
+              <span>Refresh</span>
+            </button>
+          )}
           <button
+            type="button"
             onClick={handleExportCSV}
             className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 rounded-lg transition-colors cursor-pointer"
           >
@@ -415,6 +459,9 @@ export const AuditTrailsView: React.FC<AuditTrailsViewProps> = ({
                 ) : (
                   filteredDispensations.map((rec) => {
                     const isVoided = rec.status === 'voided';
+                    const amountPaid = rec.amountPaid !== undefined ? rec.amountPaid : rec.totalAmount;
+                    const balanceDue = rec.balanceDue !== undefined ? rec.balanceDue : Math.max(0, rec.totalAmount - amountPaid);
+                    const isIncomplete = balanceDue > 0;
 
                     return (
                       <tr key={rec.id} className={`hover:bg-slate-50/80 transition-colors ${isVoided ? 'bg-rose-50/30' : ''}`}>
@@ -441,7 +488,7 @@ export const AuditTrailsView: React.FC<AuditTrailsViewProps> = ({
 
                         <td className="py-3 px-4">
                           <div className="space-y-1">
-                            {rec.items.map((it, idx) => (
+                            {(rec.items || []).map((it, idx) => (
                               <div key={idx} className="text-[11px] text-slate-700">
                                 <strong>{it.brandName}</strong> × {it.quantity} units{' '}
                                 <span className="text-[10px] text-slate-500 font-mono">(Batch #{it.batchNumber})</span>
@@ -454,9 +501,19 @@ export const AuditTrailsView: React.FC<AuditTrailsViewProps> = ({
                           <div className="font-bold text-sm text-slate-900">
                             {formatNaira(rec.totalAmount)}
                           </div>
+                          {rec.discount > 0 && (
+                            <div className="text-[10px] text-emerald-700 font-semibold">
+                              Disc: -{formatNaira(rec.discount)}
+                            </div>
+                          )}
                           <div className="text-[10px] text-slate-500">
                             {rec.paymentMethod}
                           </div>
+                          {isIncomplete && (
+                            <div className="text-[10px] text-rose-700 font-bold mt-0.5">
+                              Paid {formatNaira(amountPaid)} · Bal {formatNaira(balanceDue)}
+                            </div>
+                          )}
                         </td>
 
                         <td className="py-3 px-4">
@@ -485,25 +542,44 @@ export const AuditTrailsView: React.FC<AuditTrailsViewProps> = ({
                               </p>
                             </div>
                           ) : (
-                            <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded">
-                              <CheckCircle2 className="w-3 h-3" />
-                              Completed
-                            </span>
+                            <div className="flex flex-col items-center gap-1">
+                              <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded">
+                                <CheckCircle2 className="w-3 h-3" />
+                                Completed
+                              </span>
+                              {isIncomplete && (
+                                <span className="inline-flex items-center text-[10px] font-bold text-amber-800 bg-amber-100 border border-amber-200 px-1.5 py-0.5 rounded">
+                                  Incomplete Pay
+                                </span>
+                              )}
+                            </div>
                           )}
                         </td>
 
                         <td className="py-3 px-4 text-center">
                           <div className="flex items-center justify-center gap-1.5">
                             <button
+                              type="button"
                               onClick={() => setViewReceipt(rec)}
-                              className="p-1.5 text-slate-600 hover:text-teal-700 hover:bg-slate-100 rounded transition-colors"
+                              className="p-1.5 text-slate-600 hover:text-teal-700 hover:bg-slate-100 rounded transition-colors cursor-pointer"
                               title="Inspect Receipt"
                             >
                               <Eye className="w-4 h-4" />
                             </button>
 
+                            <button
+                              type="button"
+                              onClick={() => handleReprintReceipt(rec)}
+                              className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-semibold text-teal-800 bg-teal-50 hover:bg-teal-100 border border-teal-200 rounded transition-colors cursor-pointer"
+                              title="Reprint Transaction Receipt"
+                            >
+                              <Printer className="w-3.5 h-3.5" />
+                              <span>Reprint</span>
+                            </button>
+
                             {!isVoided && (
                               <button
+                                type="button"
                                 onClick={() => {
                                   setVoidRecord(rec);
                                   setVoidReason('');
@@ -612,71 +688,181 @@ export const AuditTrailsView: React.FC<AuditTrailsViewProps> = ({
         </div>
       )}
 
-      {/* INSPECT RECEIPT MODAL */}
-      {viewReceipt && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 backdrop-blur-xs p-4">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full border border-slate-200 overflow-hidden text-slate-900">
-            <div className="p-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Receipt className="w-5 h-5 text-teal-700" />
-                <h3 className="text-sm font-bold text-slate-900">Official Clinical Receipt #{viewReceipt.receiptNumber}</h3>
-              </div>
-              <button
-                onClick={() => setViewReceipt(null)}
-                className="text-slate-400 hover:text-slate-600 p-1 cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
+      {/* INSPECT & REPRINT RECEIPT MODAL */}
+      {viewReceipt && (() => {
+        const amtPaid = viewReceipt.amountPaid !== undefined ? viewReceipt.amountPaid : viewReceipt.totalAmount;
+        const balDue = viewReceipt.balanceDue !== undefined ? viewReceipt.balanceDue : Math.max(0, viewReceipt.totalAmount - amtPaid);
+        const changeDue = Math.max(0, amtPaid - viewReceipt.totalAmount);
+        const paymentEntries = viewReceipt.payments || [];
 
-            <div className="p-5 space-y-4 text-xs font-mono">
-              <div className="text-center pb-2 border-b border-dashed border-slate-300">
-                <h4 className="font-bold text-slate-900 text-sm">HOSPITAL PHARMACY DISPENSARY</h4>
-                <p className="text-[10px] text-slate-500">Receipt #{viewReceipt.receiptNumber}</p>
-                <p className="text-[10px] text-slate-400">{new Date(viewReceipt.dispensedAt).toLocaleString()}</p>
-              </div>
-
-              <div className="space-y-1 text-[11px]">
-                <p><strong>Patient:</strong> {viewReceipt.patientName} {viewReceipt.patientAge ? `(${viewReceipt.patientAge}y)` : ''}</p>
-                <p><strong>Prescribing Doctor:</strong> {viewReceipt.prescribingDoctor}</p>
-                <p><strong>Dispensed By:</strong> {viewReceipt.dispensedBy}</p>
-                <p><strong>Payment Approved By:</strong> {viewReceipt.paymentApprovedBy || 'Cashier Desk'}</p>
-                <p><strong>Payment Method:</strong> {viewReceipt.paymentMethod}</p>
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 backdrop-blur-xs p-4 overflow-y-auto">
+            <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full border border-slate-200 overflow-hidden text-slate-900 my-auto">
+              <div className="p-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between no-print">
+                <div className="flex items-center gap-2">
+                  <Receipt className="w-5 h-5 text-teal-700" />
+                  <h3 className="text-sm font-bold text-slate-900">Official Clinical Receipt #{viewReceipt.receiptNumber}</h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setViewReceipt(null)}
+                  className="text-slate-400 hover:text-slate-600 p-1 cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
               </div>
 
-              <div className="border-t border-b border-dashed border-slate-300 py-2 space-y-1.5">
-                {viewReceipt.items.map((it, i) => (
-                  <div key={i} className="flex justify-between text-[11px]">
-                    <div>
-                      <span>{it.brandName} x{it.quantity}</span>
-                      <span className="block text-[9px] text-slate-500">Lot: #{it.batchNumber}</span>
+              {/* Isolated Printable Receipt Area */}
+              <div className="printable-receipt-root p-5 space-y-4 text-xs font-mono bg-white">
+                <div className="text-center pb-2.5 border-b border-dashed border-slate-300">
+                  <h4 className="font-bold text-slate-900 text-sm uppercase">
+                    {tenantName || 'HOSPITAL e-MANAGER CLINICAL PHARMACY'}
+                  </h4>
+                  <p className="text-[10px] text-slate-600 font-semibold uppercase tracking-wider mt-0.5">
+                    Official Clinical Receipt · Reprint Copy
+                  </p>
+                  <p className="text-[10px] text-slate-500 mt-1">Receipt #{viewReceipt.receiptNumber}</p>
+                  <p className="text-[10px] text-slate-400">Issued: {new Date(viewReceipt.dispensedAt).toLocaleString()}</p>
+                  <p className="text-[9px] text-slate-400">Reprinted: {new Date().toLocaleString()}</p>
+                  {viewReceipt.status === 'voided' && (
+                    <div className="mt-1.5 inline-block px-2 py-0.5 border border-rose-400 bg-rose-50 text-rose-700 font-bold text-[10px] uppercase">
+                      VOIDED TRANSACTION
                     </div>
-                    <span className="font-bold">{formatNaira(it.totalPrice)}</span>
+                  )}
+                </div>
+
+                <div className="space-y-1 text-[11px]">
+                  <div className="flex justify-between gap-2">
+                    <span className="text-slate-500">Patient:</span>
+                    <span className="font-bold text-right">
+                      {viewReceipt.patientName} {viewReceipt.patientAge ? `(${viewReceipt.patientAge}y)` : ''}
+                    </span>
                   </div>
-                ))}
+                  {viewReceipt.prescriptionNumber && (
+                    <div className="flex justify-between gap-2">
+                      <span className="text-slate-500">Rx Reference:</span>
+                      <span>{viewReceipt.prescriptionNumber}</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between gap-2">
+                    <span className="text-slate-500">Prescriber:</span>
+                    <span className="text-right">{viewReceipt.prescribingDoctor || 'Attending Physician'}</span>
+                  </div>
+                  <div className="flex justify-between gap-2">
+                    <span className="text-slate-500">Dispensed By:</span>
+                    <span className="text-right">{viewReceipt.dispensedBy}</span>
+                  </div>
+                  <div className="flex justify-between gap-2">
+                    <span className="text-slate-500">Payment Approved By:</span>
+                    <span className="text-right">{viewReceipt.paymentApprovedBy || 'Cashier Desk'}</span>
+                  </div>
+                </div>
+
+                <div className="border-t border-b border-dashed border-slate-300 py-2.5 space-y-2">
+                  {viewReceipt.items.map((it, i) => (
+                    <div key={i} className="space-y-0.5 text-[11px]">
+                      <div className="flex justify-between gap-2">
+                        <span className="font-semibold">{it.brandName} × {it.quantity}</span>
+                        <span className="font-bold shrink-0">{formatNaira(it.totalPrice)}</span>
+                      </div>
+                      <div className="flex justify-between text-[9px] text-slate-500">
+                        <span>Lot: #{it.batchNumber}{it.expiryDate ? ` · Exp: ${it.expiryDate}` : ''}</span>
+                        <span>@ {formatNaira(it.unitPrice)}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Totals & Discount */}
+                <div className="space-y-1 text-[11px]">
+                  <div className="flex justify-between">
+                    <span className="text-slate-600">Subtotal:</span>
+                    <span>{formatNaira(viewReceipt.subtotal)}</span>
+                  </div>
+                  {viewReceipt.tax > 0 && (
+                    <div className="flex justify-between">
+                      <span className="text-slate-600">Tax (Historical):</span>
+                      <span>{formatNaira(viewReceipt.tax)}</span>
+                    </div>
+                  )}
+                  {viewReceipt.discount > 0 && (
+                    <div className="flex justify-between text-emerald-700 font-semibold">
+                      <span>Discount{viewReceipt.discountReason ? ` (${viewReceipt.discountReason})` : ''}:</span>
+                      <span>-{formatNaira(viewReceipt.discount)}</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between font-bold text-xs text-slate-900 border-t border-slate-300 pt-1.5">
+                    <span>NET BILL TOTAL:</span>
+                    <span>{formatNaira(viewReceipt.totalAmount)}</span>
+                  </div>
+                </div>
+
+                {/* Stacked Payment Breakdown */}
+                <div className="border-t border-dashed border-slate-300 pt-2.5 space-y-1 text-[11px]">
+                  <div className="text-[10px] font-bold uppercase text-slate-600">Payment Breakdown</div>
+                  {paymentEntries.length > 0 ? (
+                    paymentEntries.map((p, idx) => (
+                      <div key={p.id || idx} className="flex justify-between gap-2">
+                        <span className="text-slate-700">
+                          {p.method}
+                          {p.reference ? ` (${p.reference})` : ''}
+                        </span>
+                        <span className="font-semibold">{formatNaira(p.amount)}</span>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="flex justify-between gap-2">
+                      <span className="text-slate-700">{viewReceipt.paymentMethod}</span>
+                      <span className="font-semibold">{formatNaira(amtPaid)}</span>
+                    </div>
+                  )}
+
+                  <div className="flex justify-between font-bold text-xs text-teal-800 border-t border-slate-200 pt-1.5">
+                    <span>TOTAL PAID:</span>
+                    <span>{formatNaira(amtPaid)}</span>
+                  </div>
+
+                  {balDue > 0 && (
+                    <div className="flex justify-between font-bold text-xs text-rose-700 bg-rose-50 px-2 py-1 rounded border border-rose-200">
+                      <span>BALANCE DUE (INCOMPLETE):</span>
+                      <span>{formatNaira(balDue)}</span>
+                    </div>
+                  )}
+
+                  {changeDue > 0 && (
+                    <div className="flex justify-between font-semibold text-[11px] text-emerald-700">
+                      <span>Change Returned:</span>
+                      <span>{formatNaira(changeDue)}</span>
+                    </div>
+                  )}
+                </div>
+
+                <div className="text-center text-[9px] text-slate-400 border-t border-dashed border-slate-200 pt-2">
+                  Thank you for visiting our clinical pharmacy. Please follow prescribed dosage directions.
+                </div>
               </div>
 
-              <div className="space-y-1 text-right text-xs">
-                <p>Subtotal: {formatNaira(viewReceipt.subtotal)}</p>
-                <p>Tax (5%): {formatNaira(viewReceipt.tax)}</p>
-                {viewReceipt.discount > 0 && <p className="text-emerald-700">Discount: -{formatNaira(viewReceipt.discount)}</p>}
-                <p className="font-bold text-sm text-teal-800 border-t border-slate-300 pt-1">
-                  Total Settlement: {formatNaira(viewReceipt.totalAmount)}
-                </p>
+              <div className="p-3 bg-slate-50 border-t border-slate-200 flex items-center justify-between gap-2 no-print">
+                <button
+                  type="button"
+                  onClick={() => handleReprintReceipt(viewReceipt)}
+                  className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 bg-teal-700 hover:bg-teal-800 text-white rounded-lg text-xs font-semibold cursor-pointer transition-colors"
+                >
+                  <Printer className="w-3.5 h-3.5" />
+                  <span>Reprint Receipt</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setViewReceipt(null)}
+                  className="px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-lg text-xs font-semibold cursor-pointer transition-colors"
+                >
+                  Close
+                </button>
               </div>
-            </div>
-
-            <div className="p-3 bg-slate-50 border-t border-slate-200 flex justify-end gap-2">
-              <button
-                onClick={() => setViewReceipt(null)}
-                className="px-3 py-1.5 bg-slate-800 hover:bg-slate-900 text-white rounded text-xs font-semibold cursor-pointer"
-              >
-                Close
-              </button>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* VOID CONFIRMATION MODAL */}
       {voidRecord && (

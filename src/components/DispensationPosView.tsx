@@ -26,6 +26,7 @@ import { formatNaira } from '../utils/currency';
 interface DispensationPosViewProps {
   drugs: Drug[];
   orders: DispensationOrder[];
+  tenantName?: string;
   onCreateOrder: (payload: any) => Promise<DispensationOrder>;
   onFinalizeOrder: (orderId: string) => Promise<DispensationRecord>;
   onShowToast: (msg: string, type?: 'success' | 'error' | 'warning') => void;
@@ -47,6 +48,7 @@ interface CartItem {
 export const DispensationPosView: React.FC<DispensationPosViewProps> = ({
   drugs,
   orders,
+  tenantName,
   onCreateOrder,
   onFinalizeOrder,
   onShowToast,
@@ -164,14 +166,10 @@ export const DispensationPosView: React.FC<DispensationPosViewProps> = ({
     return Number(cart.reduce((sum, item) => sum + item.totalPrice, 0).toFixed(2));
   }, [cart]);
 
-  const tax = useMemo(() => {
-    return Number((subtotal * 0.05).toFixed(2));
-  }, [subtotal]);
-
   const totalAmount = useMemo(() => {
-    const total = subtotal + tax - (Number(discountAmount) || 0);
+    const total = subtotal - (Number(discountAmount) || 0);
     return Number(Math.max(0, total).toFixed(2));
-  }, [subtotal, tax, discountAmount]);
+  }, [subtotal, discountAmount]);
 
   // Create Dispensation Order
   // Prompt requirement: "Modify the dispensation module to create orders, when an order is created, it appears in the payment module where it would be approved, then the dispenser can now click on the 'finalize dispensation' button"
@@ -602,11 +600,6 @@ export const DispensationPosView: React.FC<DispensationPosViewProps> = ({
                 <span className="font-mono tabular-nums">{formatNaira(subtotal)}</span>
               </div>
 
-              <div className="flex items-center justify-between text-slate-600">
-                <span>Healthcare Sales Tax (5%)</span>
-                <span className="font-mono tabular-nums">{formatNaira(tax)}</span>
-              </div>
-
               <div className="flex items-center justify-between text-sm font-bold text-slate-900 border-t border-slate-200 pt-2">
                 <span>Order Total Amount</span>
                 <span className="font-mono text-base text-teal-700 tabular-nums">
@@ -742,8 +735,9 @@ export const DispensationPosView: React.FC<DispensationPosViewProps> = ({
                         <div className="font-medium text-slate-800">
                           {order.items.map(it => `${it.brandName} (${it.quantity}x)`).join(', ')}
                         </div>
-                        <div className="text-[10px] text-slate-400 font-mono">
-                          Total Amount: {formatNaira(order.totalAmount)}
+                        <div className="text-[10px] text-slate-500 font-mono">
+                          Net Total: {formatNaira(order.totalAmount)}
+                          {order.discount > 0 && <span className="text-emerald-700 ml-1">(Disc: -{formatNaira(order.discount)})</span>}
                         </div>
                       </td>
 
@@ -754,14 +748,28 @@ export const DispensationPosView: React.FC<DispensationPosViewProps> = ({
                             <span>Awaiting Payment in Payments Module</span>
                           </span>
                         ) : isApproved ? (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-teal-50 text-teal-800 border border-teal-200">
-                            <CheckCircle2 className="w-3 h-3 text-teal-600" />
-                            <span>Approved by {order.paymentApprovedBy || 'Cashier'}</span>
-                          </span>
+                          <div className="flex flex-col items-center gap-1">
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-teal-50 text-teal-800 border border-teal-200">
+                              <CheckCircle2 className="w-3 h-3 text-teal-600" />
+                              <span>Approved by {order.paymentApprovedBy || 'Cashier'}</span>
+                            </span>
+                            {(order.balanceDue ?? 0) > 0 && (
+                              <span className="text-[10px] font-mono font-bold text-amber-800 bg-amber-100 px-2 py-0.5 rounded">
+                                Partial Pay · Bal {formatNaira(order.balanceDue || 0)}
+                              </span>
+                            )}
+                          </div>
                         ) : (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-700">
-                            <span>Completed &amp; Handed Out</span>
-                          </span>
+                          <div className="flex flex-col items-center gap-1">
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-700">
+                              <span>Completed &amp; Handed Out</span>
+                            </span>
+                            {(order.balanceDue ?? 0) > 0 && (
+                              <span className="text-[10px] font-mono font-bold text-amber-800 bg-amber-100 px-2 py-0.5 rounded">
+                                Bal {formatNaira(order.balanceDue || 0)}
+                              </span>
+                            )}
+                          </div>
                         )}
                       </td>
 
@@ -793,108 +801,164 @@ export const DispensationPosView: React.FC<DispensationPosViewProps> = ({
       </div>
 
       {/* Printable Receipt Modal */}
-      {receiptRecord && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 overflow-y-auto">
-          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full border border-slate-200 overflow-hidden">
-            <div className="p-6 bg-slate-50 border-b border-slate-200 text-center relative">
-              <button
-                type="button"
-                onClick={() => setReceiptRecord(null)}
-                className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-              <div className="w-10 h-10 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto mb-2">
-                <CheckCircle2 className="w-6 h-6" />
-              </div>
-              <h3 className="text-base font-bold text-slate-900">Dispensation Completed</h3>
-              <p className="text-xs text-slate-500">Official Clinical Thermal Receipt</p>
-            </div>
+      {receiptRecord && (() => {
+        const amtPaid = receiptRecord.amountPaid !== undefined ? receiptRecord.amountPaid : receiptRecord.totalAmount;
+        const balDue = receiptRecord.balanceDue !== undefined ? receiptRecord.balanceDue : Math.max(0, receiptRecord.totalAmount - amtPaid);
+        const changeDue = Math.max(0, amtPaid - receiptRecord.totalAmount);
+        const paymentEntries = receiptRecord.payments || [];
 
-            {/* Receipt Body */}
-            <div className="p-6 font-mono text-xs text-slate-800 space-y-4 bg-white">
-              <div className="text-center border-b border-dashed border-slate-300 pb-3">
-                <h4 className="font-bold text-sm text-slate-900 uppercase">HOSPITAL e-MANAGER CLINICAL PHARMACY</h4>
-                <p className="text-[11px] text-slate-500 font-sans">Hospital Outpatient Pharmacy Services</p>
-                <p className="text-[10px] text-slate-400 mt-1">Receipt: #{receiptRecord.receiptNumber}</p>
-                <p className="text-[10px] text-slate-400">{new Date(receiptRecord.dispensedAt).toLocaleString()}</p>
-              </div>
+        const handlePrintThermal = () => {
+          const cleanup = () => {
+            document.body.classList.remove('printing-receipt');
+            window.removeEventListener('afterprint', cleanup);
+          };
+          window.addEventListener('afterprint', cleanup);
+          document.body.classList.add('printing-receipt');
+          setTimeout(() => {
+            window.print();
+            onShowToast('Receipt dispatched to thermal printer.', 'success');
+            setTimeout(cleanup, 1500);
+          }, 80);
+        };
 
-              <div className="space-y-1 text-[11px] border-b border-dashed border-slate-300 pb-3">
-                <div className="flex justify-between">
-                  <span className="text-slate-500">Patient:</span>
-                  <span className="font-bold">{receiptRecord.patientName}</span>
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 overflow-y-auto">
+            <div className="bg-white rounded-xl shadow-2xl max-w-md w-full border border-slate-200 overflow-hidden my-auto">
+              <div className="p-6 bg-slate-50 border-b border-slate-200 text-center relative no-print">
+                <button
+                  type="button"
+                  onClick={() => setReceiptRecord(null)}
+                  className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+                <div className="w-10 h-10 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto mb-2">
+                  <CheckCircle2 className="w-6 h-6" />
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-500">Prescriber:</span>
-                  <span>{receiptRecord.prescribingDoctor}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-500">Dispensed By:</span>
-                  <span>{receiptRecord.dispensedBy}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-500">Payment Approved By:</span>
-                  <span className="text-emerald-700 font-semibold">{receiptRecord.paymentApprovedBy || 'Cashier Desk'}</span>
-                </div>
+                <h3 className="text-base font-bold text-slate-900">Dispensation Completed</h3>
+                <p className="text-xs text-slate-500">Official Clinical Thermal Receipt</p>
               </div>
 
-              {/* Items Table */}
-              <div className="space-y-2 border-b border-dashed border-slate-300 pb-3">
-                {receiptRecord.items.map((it, idx) => (
-                  <div key={idx} className="space-y-0.5">
-                    <div className="flex justify-between font-semibold">
-                      <span>{it.brandName} ({it.quantity}x)</span>
-                      <span>{formatNaira(it.totalPrice)}</span>
-                    </div>
-                    <div className="flex justify-between text-[10px] text-slate-500">
-                      <span>Batch: {it.batchNumber} (Exp: {it.expiryDate})</span>
-                      <span>@ {formatNaira(it.unitPrice)}</span>
-                    </div>
+              {/* Isolated Printable Receipt Body */}
+              <div className="printable-receipt-root p-6 font-mono text-xs text-slate-800 space-y-4 bg-white">
+                <div className="text-center border-b border-dashed border-slate-300 pb-3">
+                  <h4 className="font-bold text-sm text-slate-900 uppercase">
+                    {tenantName || 'HOSPITAL e-MANAGER CLINICAL PHARMACY'}
+                  </h4>
+                  <p className="text-[11px] text-slate-500 font-sans">Hospital Outpatient Pharmacy Services</p>
+                  <p className="text-[10px] text-slate-400 mt-1">Receipt: #{receiptRecord.receiptNumber}</p>
+                  <p className="text-[10px] text-slate-400">{new Date(receiptRecord.dispensedAt).toLocaleString()}</p>
+                </div>
+
+                <div className="space-y-1 text-[11px] border-b border-dashed border-slate-300 pb-3">
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">Patient:</span>
+                    <span className="font-bold">{receiptRecord.patientName}</span>
                   </div>
-                ))}
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">Prescriber:</span>
+                    <span>{receiptRecord.prescribingDoctor}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">Dispensed By:</span>
+                    <span>{receiptRecord.dispensedBy}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">Payment Approved By:</span>
+                    <span className="text-emerald-700 font-semibold">{receiptRecord.paymentApprovedBy || 'Cashier Desk'}</span>
+                  </div>
+                </div>
+
+                {/* Items Table */}
+                <div className="space-y-2 border-b border-dashed border-slate-300 pb-3">
+                  {receiptRecord.items.map((it, idx) => (
+                    <div key={idx} className="space-y-0.5">
+                      <div className="flex justify-between font-semibold">
+                        <span>{it.brandName} ({it.quantity}x)</span>
+                        <span>{formatNaira(it.totalPrice)}</span>
+                      </div>
+                      <div className="flex justify-between text-[10px] text-slate-500">
+                        <span>Batch: {it.batchNumber} (Exp: {it.expiryDate})</span>
+                        <span>@ {formatNaira(it.unitPrice)}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Totals & Discount */}
+                <div className="space-y-1 text-[11px]">
+                  <div className="flex justify-between">
+                    <span>Subtotal:</span>
+                    <span>{formatNaira(receiptRecord.subtotal)}</span>
+                  </div>
+                  {receiptRecord.discount > 0 && (
+                    <div className="flex justify-between text-emerald-700 font-semibold">
+                      <span>Discount{receiptRecord.discountReason ? ` (${receiptRecord.discountReason})` : ''}:</span>
+                      <span>-{formatNaira(receiptRecord.discount)}</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between font-bold text-xs border-t border-slate-200 pt-1 text-slate-900">
+                    <span>NET BILL TOTAL:</span>
+                    <span>{formatNaira(receiptRecord.totalAmount)}</span>
+                  </div>
+                </div>
+
+                {/* Stacked Payment Breakdown */}
+                <div className="space-y-1 text-[11px] border-t border-dashed border-slate-300 pt-2">
+                  <div className="text-[10px] font-bold uppercase text-slate-500">Payments Received</div>
+                  {paymentEntries.length > 0 ? (
+                    paymentEntries.map((p, i) => (
+                      <div key={p.id || i} className="flex justify-between">
+                        <span>{p.method}{p.reference ? ` (${p.reference})` : ''}:</span>
+                        <span className="font-semibold">{formatNaira(p.amount)}</span>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="flex justify-between">
+                      <span>{receiptRecord.paymentMethod}:</span>
+                      <span className="font-semibold">{formatNaira(amtPaid)}</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between text-sm font-bold border-t border-slate-200 pt-1 text-slate-900">
+                    <span>TOTAL PAID:</span>
+                    <span>{formatNaira(amtPaid)}</span>
+                  </div>
+                  {balDue > 0 && (
+                    <div className="flex justify-between text-xs font-bold text-rose-700 bg-rose-50 px-2 py-1 rounded border border-rose-200">
+                      <span>BALANCE DUE (INCOMPLETE):</span>
+                      <span>{formatNaira(balDue)}</span>
+                    </div>
+                  )}
+                  {changeDue > 0 && (
+                    <div className="flex justify-between text-[11px] font-semibold text-emerald-700">
+                      <span>Change Returned:</span>
+                      <span>{formatNaira(changeDue)}</span>
+                    </div>
+                  )}
+                </div>
               </div>
 
-              {/* Totals */}
-              <div className="space-y-1 text-[11px]">
-                <div className="flex justify-between">
-                  <span>Subtotal:</span>
-                  <span>{formatNaira(receiptRecord.subtotal)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>Sales Tax (5%):</span>
-                  <span>{formatNaira(receiptRecord.tax)}</span>
-                </div>
-                <div className="flex justify-between text-sm font-bold border-t border-slate-200 pt-1 text-slate-900">
-                  <span>TOTAL PAID ({receiptRecord.paymentMethod}):</span>
-                  <span>{formatNaira(receiptRecord.totalAmount)}</span>
-                </div>
+              <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between gap-3 no-print">
+                <button
+                  type="button"
+                  onClick={handlePrintThermal}
+                  className="flex-1 py-2 px-3 bg-white border border-slate-300 hover:bg-slate-100 text-slate-700 text-xs font-semibold rounded-lg flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                >
+                  <Printer className="w-3.5 h-3.5" />
+                  <span>Print Thermal Receipt</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setReceiptRecord(null)}
+                  className="flex-1 py-2 px-3 bg-teal-700 hover:bg-teal-800 text-white text-xs font-semibold rounded-lg transition-colors cursor-pointer"
+                >
+                  Done
+                </button>
               </div>
-            </div>
-
-            <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between gap-3">
-              <button
-                type="button"
-                onClick={() => {
-                  window.print();
-                  onShowToast('Receipt dispatched to thermal printer.', 'success');
-                }}
-                className="flex-1 py-2 px-3 bg-white border border-slate-300 hover:bg-slate-100 text-slate-700 text-xs font-semibold rounded-lg flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
-              >
-                <Printer className="w-3.5 h-3.5" />
-                <span>Print Thermal Receipt</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setReceiptRecord(null)}
-                className="flex-1 py-2 px-3 bg-teal-700 hover:bg-teal-800 text-white text-xs font-semibold rounded-lg transition-colors cursor-pointer"
-              >
-                Done
-              </button>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
     </div>
   );
 };
